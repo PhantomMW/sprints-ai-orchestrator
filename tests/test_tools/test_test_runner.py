@@ -216,12 +216,10 @@ def test_adversarial_attempt_os_exit_in_child():
 def divide(a, b):
     return a / b
 """
-    suite = """
-import os
-os._exit(0)
-"""
+    suite = "import os; os._exit(0)"
     res = run_automated_tests(code=code, test_suite=suite)
     assert res["status"] == "success"
+    assert res["total"] == 1
     assert res["failed"] == 1
     assert res["passed"] == 0
     assert "Abnormal process exit" in res["results"][0]["error"] or "exit" in res["results"][0]["error"].lower()
