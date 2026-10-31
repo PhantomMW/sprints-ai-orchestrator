@@ -1,8 +1,10 @@
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from langchain.tools import tool
+from src.utils.auth import verify_caller_token
 
 
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "sprints_learners.sqlite3"
@@ -24,6 +26,28 @@ ALLOWED_COLUMNS = {
     "readiness_status",
 }
 
+
+def _authorize_caller(requester_role: str, auth_token: str | None = None) -> tuple[bool, str]:
+    """Verify caller authorization using cryptographic tokens in production or role allowlists."""
+    app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+
+    if auth_token:
+        valid, reason, payload = verify_caller_token(auth_token)
+        if not valid:
+            return False, f"Unauthorized access: Invalid caller token ({reason})"
+        role = str(payload.get("role", "")).strip().casefold()
+        if role not in AUTHORIZED_QUERY_ROLES:
+            return False, f"Unauthorized access: Token role '{role}' lacks database query privilege."
+        return True, f"Authorized via token for caller '{payload.get('caller_id')}' (role: {role})"
+
+    if app_env in ("production", "prod", "staging"):
+        return False, "Unauthorized access: Cryptographic auth_token is required to query learner PII in production."
+
+    clean_role = str(requester_role).strip().casefold()
+    if clean_role not in AUTHORIZED_QUERY_ROLES:
+        return False, f"Unauthorized access: Caller role '{requester_role}' is not permitted to query learner PII."
+    return True, f"Authorized for role '{clean_role}'"
+
 # Role-based access control for accessing learner PII
 AUTHORIZED_QUERY_ROLES = {
     "advisor",
@@ -43,7 +67,7 @@ def _ensure_db_exists() -> bool:
 # Safe Parameterized Domain Operations (Strictly No Arbitrary SQL Execution)
 # ==============================================================================
 
-def get_learner_by_id(student_id: str, requester_role: str = "advisor") -> dict[str, Any]:
+def get_learner_by_id(student_id: str, requester_role: str = "advisor", auth_token: str | None = None) -> dict[str, Any]:
     """
     Retrieve an individual learner profile using a safe, parameterized SQL query.
 
@@ -61,10 +85,11 @@ def get_learner_by_id(student_id: str, requester_role: str = "advisor") -> dict[
     Returns:
         Dictionary with status 'success' and learner data in a bounded list.
     """
-    if str(requester_role).strip().casefold() not in AUTHORIZED_QUERY_ROLES:
+    authorized, auth_msg = _authorize_caller(requester_role=requester_role, auth_token=auth_token)
+    if not authorized:
         return {
             "status": "error",
-            "message": f"Unauthorized access: Caller role '{requester_role}' is not permitted to query learner PII.",
+            "message": auth_msg,
             "row_count": 0,
             "data": [],
         }
@@ -136,6 +161,7 @@ def search_learners_by_track(
     bootcamp_track: str,
     limit: int = MAX_QUERY_ROWS,
     requester_role: str = "advisor",
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     """
     Retrieve learners enrolled in a specific bootcamp track using a parameterized query.
@@ -155,10 +181,11 @@ def search_learners_by_track(
     Returns:
         Bounded list of learners in the specified track.
     """
-    if str(requester_role).strip().casefold() not in AUTHORIZED_QUERY_ROLES:
+    authorized, auth_msg = _authorize_caller(requester_role=requester_role, auth_token=auth_token)
+    if not authorized:
         return {
             "status": "error",
-            "message": f"Unauthorized access: Caller role '{requester_role}' is not permitted to query learner PII.",
+            "message": auth_msg,
             "row_count": 0,
             "data": [],
         }

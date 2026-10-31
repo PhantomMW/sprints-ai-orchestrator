@@ -143,78 +143,168 @@ _start_marker = {repr(start_marker)}
 _end_marker = {repr(end_marker)}
 _test_cases = {repr(test_cases)}
 
-_compilation_error = None
-_compiled_code = None
-
-try:
-    _compiled_code = compile(_code_str, "<learner_code>", "exec")
-except _safe_BaseException as _ce:
-    _compilation_error = f"{{type(_ce).__name__}}: {{_ce}}"
-
-_captured_stdout = ""
-_base_globals = {{"__builtins__": __builtins__}}
-
-if not _compilation_error:
-    _io_buf = _safe_StringIO()
-    sys.stdout = _io_buf
-    try:
-        # Execute student code ONCE to capture stdout and populate namespace
-        exec(_compiled_code, _base_globals)
-    except _safe_BaseException as _re:
-        _compilation_error = f"{{type(_re).__name__}}: {{_re}}"
-    finally:
-        sys.stdout = _safe_orig_stdout
-        _captured_stdout = _io_buf.getvalue()
-
-_base_globals["_captured_stdout"] = _captured_stdout
-
 _results = []
-if _compilation_error:
-    for _name, _ in _test_cases:
-        _results.append({{"name": _name, "status": "FAILED", "error": _compilation_error}})
-else:
-    for _name, _case_src in _test_cases:
-        if _safe_has_fork:
-            # True OS Process Isolation via fork (Linux Docker sandbox)
-            _r_fd, _w_fd = _safe_pipe()
-            _pid = _safe_fork()
-            if _pid == 0:
-                # Inside isolated child process
-                _safe_close(_r_fd)
+_captured_stdout = ""
+_compilation_error = None
+
+if _safe_has_fork:
+    # Dedicated Worker Process Isolation:
+    # The parent harness process NEVER executes untrusted student code!
+    _m_r_fd, _m_w_fd = _safe_pipe()
+    _worker_pid = _safe_fork()
+    if _worker_pid == 0:
+        # INSIDE DEDICATED WORKER CHILD PROCESS
+        _safe_close(_m_r_fd)
+        try:
+            # 1. Neutralize stack frame reflection and inspection
+            for _attr in ("_getframe", "_current_frames"):
+                if hasattr(sys, _attr):
+                    try:
+                        delattr(sys, _attr)
+                    except Exception:
+                        pass
+            if hasattr(sys, "settrace"):
                 try:
-                    exec(_case_src, _base_globals)
-                    _safe_write(_w_fd, b"OK")
-                    _safe_exit(0)
-                except AssertionError as _ae:
-                    _msg = (str(_ae) or "Assertion failed").encode("utf-8", "replace")
-                    _safe_write(_w_fd, b"FAIL:" + _msg)
-                    _safe_exit(1)
-                except _safe_BaseException as _be:
-                    _msg = f"{{type(_be).__name__}}: {{_be}}".encode("utf-8", "replace")
-                    _safe_write(_w_fd, b"ERR:" + _msg)
-                    _safe_exit(2)
+                    sys.settrace(None)
+                except Exception:
+                    pass
+            if hasattr(sys, "setprofile"):
+                try:
+                    sys.setprofile(None)
+                except Exception:
+                    pass
+
+            # 2. Block sensitive execution vector modules
+            sys.modules["ctypes"] = None
+            sys.modules["_ctypes"] = None
+
+            # 3. Compile and execute student code inside worker
+            _w_compiled = None
+            _w_comp_err = None
+            try:
+                _w_compiled = compile(_code_str, "<learner_code>", "exec")
+            except _safe_BaseException as _ce:
+                _w_comp_err = f"{{type(_ce).__name__}}: {{_ce}}"
+
+            _w_captured = ""
+            _w_base_globals = {{"__builtins__": __builtins__}}
+
+            if not _w_comp_err:
+                _w_buf = _safe_StringIO()
+                sys.stdout = _w_buf
+                try:
+                    exec(_w_compiled, _w_base_globals)
+                except _safe_BaseException as _re:
+                    _w_comp_err = f"{{type(_re).__name__}}: {{_re}}"
+                finally:
+                    sys.stdout = _safe_orig_stdout
+                    _w_captured = _w_buf.getvalue()
+
+            _w_base_globals["_captured_stdout"] = _w_captured
+
+            # 4. Evaluate each assertion in an assertion child process
+            _w_results = []
+            if _w_comp_err:
+                for _name, _ in _test_cases:
+                    _w_results.append({{"name": _name, "status": "FAILED", "error": _w_comp_err}})
             else:
-                # Inside parent harness process
-                _safe_close(_w_fd)
-                _, _status = _safe_waitpid(_pid, 0)
-                with _safe_fdopen(_r_fd, "rb") as _rf:
-                    _pipe_out = _rf.read().decode("utf-8", "replace")
-                
-                _exit_code = _safe_WEXITSTATUS(_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_status)) else -1
-                if _exit_code == 0 and _pipe_out == "OK":
-                    _results.append({{"name": _name, "status": "PASSED", "error": ""}})
-                elif _pipe_out.startswith("FAIL:"):
-                    _results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[5:]}})
-                elif _pipe_out.startswith("ERR:"):
-                    _results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[4:]}})
-                else:
-                    _results.append({{
-                        "name": _name,
-                        "status": "FAILED",
-                        "error": f"Abnormal process exit (exit code {{_exit_code}})",
-                    }})
+                for _name, _case_src in _test_cases:
+                    _c_r_fd, _c_w_fd = _safe_pipe()
+                    _c_pid = _safe_fork()
+                    if _c_pid == 0:
+                        _safe_close(_c_r_fd)
+                        try:
+                            exec(_case_src, _w_base_globals)
+                            _safe_write(_c_w_fd, b"OK")
+                            _safe_exit(0)
+                        except AssertionError as _ae:
+                            _msg = (str(_ae) or "Assertion failed").encode("utf-8", "replace")
+                            _safe_write(_c_w_fd, b"FAIL:" + _msg)
+                            _safe_exit(1)
+                        except _safe_BaseException as _be:
+                            _msg = f"{{type(_be).__name__}}: {{_be}}".encode("utf-8", "replace")
+                            _safe_write(_c_w_fd, b"ERR:" + _msg)
+                            _safe_exit(2)
+                    else:
+                        _safe_close(_c_w_fd)
+                        _, _c_status = _safe_waitpid(_c_pid, 0)
+                        with _safe_fdopen(_c_r_fd, "rb") as _rf:
+                            _pipe_out = _rf.read().decode("utf-8", "replace")
+                        _c_exit = _safe_WEXITSTATUS(_c_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_c_status)) else -1
+                        if _c_exit == 0 and _pipe_out == "OK":
+                            _w_results.append({{"name": _name, "status": "PASSED", "error": ""}})
+                        elif _pipe_out.startswith("FAIL:"):
+                            _w_results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[5:]}})
+                        elif _pipe_out.startswith("ERR:"):
+                            _w_results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[4:]}})
+                        else:
+                            _w_results.append({{
+                                "name": _name,
+                                "status": "FAILED",
+                                "error": f"Abnormal process exit (exit code {{_c_exit}})",
+                            }})
+
+            _w_payload = _safe_json_dumps({{
+                "results": _w_results,
+                "captured_stdout": _w_captured,
+                "compilation_error": _w_comp_err,
+            }}).encode("utf-8")
+            _safe_write(_m_w_fd, _w_payload)
+            _safe_close(_m_w_fd)
+            _safe_exit(0)
+        except _safe_BaseException as _fatal:
+            _safe_exit(3)
+    else:
+        # PARENT HARNESS PROCESS (Immune to student code tampering)
+        _safe_close(_m_w_fd)
+        _, _w_status = _safe_waitpid(_worker_pid, 0)
+        with _safe_fdopen(_m_r_fd, "rb") as _rf:
+            _raw_worker_out = _rf.read().decode("utf-8", "replace")
+
+        _w_exit = _safe_WEXITSTATUS(_w_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_w_status)) else -1
+        _worker_data = None
+        if _w_exit == 0 and _raw_worker_out:
+            try:
+                _worker_data = json.loads(_raw_worker_out)
+            except Exception:
+                pass
+
+        if _worker_data:
+            _results = _worker_data.get("results", [])
+            _captured_stdout = _worker_data.get("captured_stdout", "")
+            _compilation_error = _worker_data.get("compilation_error")
         else:
-            # Fallback per-test namespace isolation for non-fork environments (Windows tests)
+            _results = [
+                {{"name": _name, "status": "FAILED", "error": f"Abnormal worker process exit (exit code {{_w_exit}})"}}
+                for _name, _ in _test_cases
+            ]
+            _captured_stdout = ""
+            _compilation_error = f"Abnormal worker termination ({{_w_exit}})"
+else:
+    # Non-fork fallback (Windows development / non-fork environments)
+    try:
+        _compiled_code = compile(_code_str, "<learner_code>", "exec")
+    except _safe_BaseException as _ce:
+        _compilation_error = f"{{type(_ce).__name__}}: {{_ce}}"
+
+    _base_globals = {{"__builtins__": __builtins__}}
+    if not _compilation_error:
+        _io_buf = _safe_StringIO()
+        sys.stdout = _io_buf
+        try:
+            exec(_compiled_code, _base_globals)
+        except _safe_BaseException as _re:
+            _compilation_error = f"{{type(_re).__name__}}: {{_re}}"
+        finally:
+            sys.stdout = _safe_orig_stdout
+            _captured_stdout = _io_buf.getvalue()
+
+    _base_globals["_captured_stdout"] = _captured_stdout
+    if _compilation_error:
+        for _name, _ in _test_cases:
+            _results.append({{"name": _name, "status": "FAILED", "error": _compilation_error}})
+    else:
+        for _name, _case_src in _test_cases:
             _test_ns = dict(_base_globals)
             try:
                 exec(_case_src, _test_ns)

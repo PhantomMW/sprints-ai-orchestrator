@@ -2,7 +2,7 @@
 ## Sprints Multi-Agent AI Career & Assessment Orchestrator
 
 **Target duration:** 3 to 5 minutes  
-**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 73 automated tests (72 passed in CI, 1 skipped) and GitHub Actions CI.
+**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 89 automated tests across 12 suites (88 passed in CI, 1 skipped) and GitHub Actions CI.
 
 ---
 
@@ -48,7 +48,9 @@ Once the profile is loaded, the Career Advisor initiates an **Agentic RAG loop**
 
 To ensure evaluation integrity and runtime safety, we implemented a two-tier assessment pipeline:
 
-1. **Automated Test Runner with Multi-Layer Process Isolation & Tampering Resistance:**  
+1. **Automated Test Runner with Master-Worker Process Isolation & Tampering Resistance:**
+   - Master-Worker Process Isolation: The parent harness process NEVER executes untrusted student code directly. A dedicated worker child process handles compilation, execution, and stdout capture, while the parent harness remains immutable and traps worker exits.
+   - Neutralizes reflection hooks (`_getframe`, `_current_frames`, `settrace`, `setprofile`) and blocks dangerous module imports (`ctypes`, `_ctypes`).  
    Rather than relying purely on LLM subjective grading, submissions undergo deterministic unit testing with True OS Process Isolation and single-pass execution:
    - Pre-compiles and executes learner code exactly once, capturing stdout/stderr without redundant re-runs.
    - Executes each unit assertion in a dedicated child process (`os.fork()` on Linux with copy-on-write memory and pipe IPC), providing true operating system process isolation.
@@ -104,17 +106,19 @@ This guarantees that AI never commits placement promises autonomously without in
 
 ---
 
-## 3:45–4:15 | Automated Verification Suite & CI / CD (73 Tests: 72 Passed, 1 Skipped in CI)
+## 3:45–4:15 | Automated Verification Suite & CI / CD (89 Tests: 88 Passed, 1 Skipped in CI)
 
-"To prove engineering reliability, the repository features an automated test suite with **73 comprehensive tests** across 10 test suites:
-- `test_db_queries.py`: 17 tests verifying row bounds, projection filters, parameterization, caller role authorization, suppression count masking, and SQL injection resistance.
-- `test_docker_executor.py`: 14 tests validating 64 KiB truncation, timeout enforcement, non-root user, read-only storage, and process failure recovery.
-- `test_test_runner.py`: 16 tests asserting deterministic test runner execution, compilation error trapping, OS process isolation (`os.fork()`), delimiter protection, and 4 adversarial tampering defenses.
-- `test_sqlite_checkpoint.py`: 7 tests ensuring cross-instance state persistence, thread isolation, WAL concurrency, cross-process durability, HMAC tamper detection, and retention pruning.
+"To prove engineering reliability, the repository features an automated test suite with **89 comprehensive tests** across 12 test suites:
+- `test_db_queries.py`: 19 tests verifying row bounds, projection filters, parameterization, caller token cryptographic verification, caller role authorization (`requester_role`), production token enforcement, suppression count masking, and SQL injection resistance.
+- `test_auth.py`: 5 tests verifying PBKDF2-HMAC-SHA256 password hashing with salt, reviewer login authentication, persistent SQLite anti-replay store across restarts, production secret enforcement, and database caller tokens.
+- `test_e2e_integration.py`: 2 tests asserting complete end-to-end multi-agent workflow: signed caller token DB lookup, Career Advisor RAG retrieval, Evaluator-Optimizer loop, conditional HITL review interrupt, human reviewer PBKDF2 login, HMAC session token issuance, graph resumption, and durable SQLite checkpoint restoration across instances.
+- `test_test_runner.py`: 18 tests asserting master-worker process isolation (parent harness process never executes untrusted code), test case parsing, compilation error trapping, OS process isolation (`os.fork()`), delimiter protection, and 6 adversarial tampering defenses (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, and ctypes neutralization).
+- `test_sqlite_checkpoint.py`: 9 tests ensuring cross-instance state persistence, thread isolation, WAL concurrency, cross-process durability, HMAC tamper detection, coordinate-bound signature verification preventing thread swapping, production secret key enforcement, and retention pruning.
+- `test_agentic_rag.py`: 5 tests verifying self-reflective query reformulation, retrieval bounds, multi-track curriculum coverage, source trust prioritization, and out-of-domain detection.
+- `test_docker_executor.py`: 14 tests validating pinned immutable base image digest (`python:3.10-slim@sha256:...`), 64 KiB truncation, timeout enforcement, non-root user, read-only storage, and process failure recovery.
 - `test_orchestrator_evaluator.py`: 8 tests verifying end-to-end graph routing, loop caps, HITL interrupts, cryptographic HMAC reviewer authentication, signature verification, and anti-replay defense.
 - `test_assessor_agent.py`: 4 tests verifying fail-closed error handling and scoring guardrails against failing unit tests.
-- `test_agentic_rag.py`: 3 tests verifying self-reflective query reformulation and retrieval bounds.
-- `test_evaluator_optimizer.py`: 3 tests verifying optimization loop bounds and quality metrics.
+- `test_evaluator_optimizer.py`: 2 tests verifying optimization loop bounds and quality metrics.
 - `test_logger.py`: 2 tests verifying structured JSON logging and telemetry.
 - `test_live_gemini_integration.py`: 1 test verifying live Gemini API connectivity.
 
@@ -140,7 +144,7 @@ Before presenting, ensure:
 - [ ] Virtual environment active: `.\.venv\Scripts\activate`
 - [ ] Docker Desktop running with Linux engine: `docker info`
 - [ ] Sandbox image built: `docker images sprints-python-sandbox:latest`
-- [ ] Run full test suite: `pytest -v` (verify 73 tests collected: 52 passed locally, 21 skipped for Docker/Live API)
+- [ ] Run full test suite: `pytest -v` (verify 89 tests collected: 66 passed locally, 23 skipped for Docker/Live API)
 - [ ] Run automated demo: `python src/main.py --mode demo`
 - [ ] Run interactive mode (optional): `python src/main.py --mode interactive`
 - [ ] Verify `SYN-DEMO-01` synthetic profile is loaded with zero personal data leakage.

@@ -4,7 +4,15 @@ import uuid
 from typing import Any
 
 
-SANDBOX_IMAGE = "sprints-python-sandbox:latest"
+import os
+
+# Pinned immutable SHA256 digest for python:3.10-slim base image (Debian Bookworm)
+# Ensures reproducible, deterministic container builds and guards against supply-chain poisoning
+PINNED_BASE_IMAGE_DIGEST = (
+    "python:3.10-slim@sha256:d8ca19faeec9a79fa4f9fb501ba6d8ebfc48dcf32f5d0fdf9fbb50e41cf86c28"
+)
+DEFAULT_SANDBOX_IMAGE = "sprints-python-sandbox:latest"
+SANDBOX_IMAGE = os.getenv("SPRINTS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
 
 EXECUTION_TIMEOUT = 5
 

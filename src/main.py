@@ -15,7 +15,7 @@ from langgraph.types import Command
 from src.agents.orchestrator import build_orchestrator
 from src.tools.sqlite_checkpoint import SqliteSaver
 from src.tools.test_runner import run_automated_tests
-from src.utils.auth import generate_reviewer_token
+from src.utils.auth import generate_reviewer_token, login_and_issue_token
 
 orchestrator = build_orchestrator(checkpointer=SqliteSaver())
 
@@ -210,10 +210,23 @@ def run_interactive_mode():
                 print("This recommendation qualifies for tier-1 placement review.")
                 dec = input("Decision [A]pprove / [R]eject: ").strip().lower()
                 approved = dec.startswith("a")
-                auth_tok = generate_reviewer_token("sarah_lead", "placement_approver") if approved else None
+                auth_tok = None
+                rev_user = "interactive_reviewer"
+                if approved:
+                    print("\n--- Institutional Reviewer Login ---")
+                    rev_user = input("Reviewer Username [default: sarah_lead]: ").strip() or "sarah_lead"
+                    rev_pass = input("Reviewer Password [default: SprintsAdvisor2026!]: ").strip() or "SprintsAdvisor2026!"
+                    login_ok, login_msg, auth_tok = login_and_issue_token(rev_user, rev_pass)
+                    if not login_ok:
+                        print(f"Authentication failed: {login_msg}")
+                        approved = False
+                        auth_tok = None
+                    else:
+                        print(f"Reviewer authenticated successfully. Token issued for {rev_user}.")
+
                 resume_payload = {
                     "approved": approved,
-                    "reviewer": "sarah_lead" if approved else "interactive_reviewer",
+                    "reviewer": rev_user,
                     "auth_token": auth_tok,
                     "comments": "Reviewed and submitted via CLI",
                 }

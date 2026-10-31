@@ -44,22 +44,35 @@ class SqliteSaver(InMemorySaver):
         super().__init__()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.secret_key = (
-            secret_key or os.getenv("CHECKPOINT_SECRET_KEY") or "sprints-checkpoint-integrity-key-2026"
-        ).encode("utf-8")
+        app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+        resolved_key = secret_key or os.getenv("CHECKPOINT_SECRET_KEY")
+        if app_env in ("production", "prod", "staging"):
+            if not resolved_key:
+                raise CheckpointSecurityError(
+                    "FATAL: CHECKPOINT_SECRET_KEY environment variable is mandatory in production/staging environments."
+                )
+            if resolved_key == "sprints-checkpoint-integrity-key-2026":
+                raise CheckpointSecurityError(
+                    "FATAL: Insecure default CHECKPOINT_SECRET_KEY detected in production. A strong key must be configured."
+                )
+        self.secret_key = (resolved_key or "sprints-checkpoint-integrity-key-2026").encode("utf-8")
         self._lock = threading.Lock()
         self._init_db()
         self._load_from_db()
 
-    def _sign(self, data: bytes) -> str:
-        """Compute an HMAC-SHA256 signature for serialized binary data."""
-        return hmac.new(self.secret_key, data, hashlib.sha256).hexdigest()
+    def _sign(self, data: bytes, context_prefix: str = "") -> str:
+        """Compute an HMAC-SHA256 signature bound to contextual row identifiers to prevent cut-and-paste attacks."""
+        payload = context_prefix.encode("utf-8") + data
+        return hmac.new(self.secret_key, payload, hashlib.sha256).hexdigest()
 
-    def _verify_signature(self, data: bytes, signature: str | None) -> bool:
-        """Verify the integrity of a serialized binary blob against its signature."""
+    def _verify_signature(self, data: bytes, signature: str | None, context_prefix: str = "") -> bool:
+        """Verify the integrity of a serialized binary blob against its signature with coordinate binding."""
         if not signature:
-            return True  # Backward compatibility for legacy unsigned rows
-        expected = self._sign(data)
+            app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+            if app_env in ("production", "prod", "staging"):
+                return False  # Unsigned checkpoints are strictly rejected in production environments
+            return True  # Permitted in development for backward compatibility
+        expected = self._sign(data, context_prefix=context_prefix)
         return hmac.compare_digest(expected, signature)
 
     def _connect(self) -> sqlite3.Connection:
@@ -124,7 +137,8 @@ class SqliteSaver(InMemorySaver):
                     "SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple, signature FROM checkpoints"
                 ):
                     t_id, ns, cp_id, cp_data, sig = row
-                    if not self._verify_signature(cp_data, sig):
+                    ctx = f"{t_id}:{ns}:{cp_id}:"
+                    if not self._verify_signature(cp_data, sig, context_prefix=ctx):
                         raise SecurityError(
                             f"Integrity check failed for checkpoint {t_id}/{cp_id}: signature mismatch."
                         )
@@ -132,13 +146,15 @@ class SqliteSaver(InMemorySaver):
 
                 for row in conn.execute("SELECT blob_key, blob_data, signature FROM blobs"):
                     b_key, b_data, sig = row
-                    if not self._verify_signature(b_data, sig):
+                    ctx = f"blob:{b_key!r}:"
+                    if not self._verify_signature(b_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint blob: signature mismatch.")
                     self.blobs[pickle.loads(b_key)] = pickle.loads(b_data)
 
                 for row in conn.execute("SELECT write_key, write_tuple, signature FROM writes"):
                     w_key, w_data, sig = row
-                    if not self._verify_signature(w_data, sig):
+                    ctx = f"write:{w_key!r}:"
+                    if not self._verify_signature(w_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint write: signature mismatch.")
                     outer_key, inner_key = pickle.loads(w_key)
                     self.writes[outer_key][inner_key] = pickle.loads(w_data)
@@ -162,7 +178,8 @@ class SqliteSaver(InMemorySaver):
             try:
                 if cp_id in self.storage[thread_id][checkpoint_ns]:
                     data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
-                    sig = self._sign(data)
+                    ctx = f"{thread_id}:{checkpoint_ns}:{cp_id}:"
+                    sig = self._sign(data, context_prefix=ctx)
                     conn.execute(
                         "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?, ?)",
                         (thread_id, checkpoint_ns, cp_id, data, sig),
@@ -171,9 +188,11 @@ class SqliteSaver(InMemorySaver):
                     blob_key = (thread_id, checkpoint_ns, k, v)
                     if blob_key in self.blobs:
                         b_data = pickle.dumps(self.blobs[blob_key])
+                        b_key_ser = pickle.dumps(blob_key)
+                        ctx = f"blob:{b_key_ser!r}:"
                         conn.execute(
                             "INSERT OR REPLACE INTO blobs VALUES (?, ?, ?)",
-                            (pickle.dumps(blob_key), b_data, self._sign(b_data)),
+                            (b_key_ser, b_data, self._sign(b_data, context_prefix=ctx)),
                         )
                 conn.commit()
             finally:
@@ -199,10 +218,12 @@ class SqliteSaver(InMemorySaver):
                 if outer_key in self.writes:
                     for inner_key, write_tuple in list(self.writes[outer_key].items()):
                         full_key = (outer_key, inner_key)
+                        full_key_ser = pickle.dumps(full_key)
                         w_data = pickle.dumps(write_tuple)
+                        ctx = f"write:{full_key_ser!r}:"
                         conn.execute(
                             "INSERT OR REPLACE INTO writes VALUES (?, ?, ?)",
-                            (pickle.dumps(full_key), w_data, self._sign(w_data)),
+                            (full_key_ser, w_data, self._sign(w_data, context_prefix=ctx)),
                         )
                 conn.commit()
             finally:

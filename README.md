@@ -165,14 +165,16 @@ sprints-ai-orchestrator/
 │   └── TECHNICAL_DOCUMENTATION.md
 ├── tests/
 │   ├── test_agents/
-│   │   ├── test_agentic_rag.py
+│   │   ├── test_agentic_rag.py       # Multi-track RAG quality & trust prioritization
+│   │   ├── test_assessor_agent.py    # Fail-closed grading & runner integration
+│   │   ├── test_e2e_integration.py   # End-to-end multi-agent lifecycle tests
 │   │   ├── test_evaluator_optimizer.py
-│   │   ├── test_orchestrator_evaluator.py
-│   │   └── test_assessor_agent.py
+│   │   └── test_orchestrator_evaluator.py
 │   └── test_tools/
-│       ├── test_sqlite_checkpoint.py # Persistent checkpointer & restart resumption
-│       ├── test_db_queries.py        # Synthetic isolated database fixture tests
-│       ├── test_test_runner.py       # Anti-tampering & unit test runner tests
+│       ├── test_auth.py              # PBKDF2 reviewer login, replay store, caller tokens
+│       ├── test_sqlite_checkpoint.py # Checkpointer persistence, coordinate binding, HMAC
+│       ├── test_db_queries.py        # Parameterized queries, caller token RBAC, k-anonymity
+│       ├── test_test_runner.py       # Master-worker process isolation, adversarial suites
 │       └── test_docker_executor.py   # Docker runtime, timeout, truncation & isolation
 ├── pytest.ini
 ├── LICENSE
@@ -269,13 +271,15 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **73 automated tests (72 passed in CI, 1 skipped when live Gemini API key is absent)** with a 100% pass rate among runnable tests, covering:
-* **Agent Workflows & Governance (17 tests):** Agentic RAG retries/stopping, evaluator-optimizer iteration limits, routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC session token verification, token signature tampering rejection, replay attack defense, assessor single-pass grading, fail-closed runner crash abortion, and live Gemini API integration.
-* **Database Privacy & Parameterized Operations (17 tests):** Parameterized single-learner lookups, track searches, row bounds, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), and k-anonymity cohort privacy (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage in error messages.
-* **Automated Test Runner & Adversarial Hardening (16 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), delimiter spoofing defense, and 4 dedicated adversarial tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping in child process, builtins corruption immunity, and frame inspection defense).
-* **Persistent SQLite Checkpointing (7 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, and retention policy purging (`purge_old_checkpoints`).
+The comprehensive test suite currently consists of **89 automated tests across 12 suites (88 passed in CI, 1 skipped when live Gemini API key is absent)** with a 100% pass rate among runnable tests, covering:
+* **Agent Workflows & Governance (20 tests):** Multi-track Agentic RAG retries, quality scoring, source trust prioritization, out-of-domain detection, evaluator-optimizer iteration limits, routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC session token verification, token signature tampering rejection, replay attack defense, assessor single-pass grading, fail-closed runner crash abortion, and live Gemini API integration.
+* **End-to-End Multi-Agent Integration (2 tests):** Complete lifecycle test traversing cryptographic caller token verification, learner DB lookup, Career Advisor RAG retrieval, Evaluator-Optimizer loop, conditional HITL review interrupt, human reviewer PBKDF2 login, HMAC session token issuance, graph resumption, and durable SQLite checkpoint restoration across instances.
+* **Reviewer Authentication & Cryptographic Governance (5 tests):** PBKDF2-HMAC-SHA256 password hashing with salt and constant-time verification, institutional reviewer credential authentication, persistent SQLite anti-replay nonce store, production secret key enforcement (`SecurityConfigurationError`), and database caller authorization token generation/verification.
+* **Database Privacy & Parameterized Operations (19 tests):** Parameterized single-learner lookups, track searches, row bounds, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), cryptographic caller token authorization (`auth_token`), production token enforcement, and k-anonymity cohort privacy (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage in error messages.
+* **Automated Test Runner & Adversarial Hardening (18 tests):** Master-worker process isolation (parent harness process never executes untrusted code), test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` trapping, delimiter spoofing defense, and 6 dedicated adversarial tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping in child process, builtins corruption immunity, frame inspection defense, learner code suicide trapping, and ctypes memory attack neutralization).
+* **Persistent SQLite Checkpointing & Integrity (9 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, coordinate-bound signature verification preventing cut-and-paste thread swapping, production secret key enforcement, and retention policy purging (`purge_old_checkpoints`).
 * **Structured Logging & Observability (2 tests):** Structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
-* **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
+* **Docker Execution & Sandbox Runtime (14 tests):** Pinned immutable base image digest (`python:3.10-slim@sha256:...`), bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.
 

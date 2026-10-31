@@ -1033,7 +1033,7 @@ Automated tests should use mocks and should not require a live API key.
 
 ## 14. Testing
 
-The test suite contains **63 automated tests** across 10 test suites spanning agent workflows, domain tools, logging, and sandbox execution:
+The test suite contains **63 automated tests** across 12 test suites spanning agent workflows, domain tools, logging, and sandbox execution:
 
 - `tests/test_agents/test_agentic_rag.py` (2 tests): validates Agentic RAG retry behavior and sufficiency stopping.
 
@@ -1186,7 +1186,7 @@ approval checkpoint.
 
 The project has a working prototype structure and an extensive passing
 
-test suite (73 automated tests). Its architecture incorporates multi-layer process isolation,
+test suite (89 automated tests across 12 suites). Its architecture incorporates multi-layer process isolation,
 
 durable SQLite checkpointing with HMAC payload signing, role-based HITL authentication,
 

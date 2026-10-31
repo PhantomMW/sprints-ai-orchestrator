@@ -216,3 +216,31 @@ def test_search_learners_by_track_role_authorization():
     assert res_unauth["status"] == "error"
     assert res_unauth["row_count"] == 0
     assert "Unauthorized access" in res_unauth["message"]
+
+
+def test_db_queries_cryptographic_caller_token():
+    """Verify that cryptographically signed caller tokens grant access and forged ones fail."""
+    import os
+    from src.utils.auth import generate_caller_token
+
+    valid_token = generate_caller_token("advisor_agent_1", "advisor")
+    res = get_learner_by_id("SPR-1001", auth_token=valid_token)
+    assert res["status"] == "success"
+    assert res["row_count"] == 1
+
+    # Tampered token
+    tampered_token = valid_token[:-4] + "dead"
+    res_tampered = get_learner_by_id("SPR-1001", auth_token=tampered_token)
+    assert res_tampered["status"] == "error"
+    assert "Invalid caller token" in res_tampered["message"]
+
+
+def test_db_queries_rejects_unsigned_callers_in_production(monkeypatch):
+    """Verify that in production environments unsigned access without a caller token is blocked."""
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.setenv("HITL_AUTH_SECRET", "prod-secret-key-test-123456789012345678")
+
+    # Calling without token in production is blocked even with valid role string
+    res = get_learner_by_id("SPR-1001", requester_role="advisor")
+    assert res["status"] == "error"
+    assert "Cryptographic auth_token is required" in res["message"]

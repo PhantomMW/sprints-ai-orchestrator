@@ -293,3 +293,38 @@ def test_sqlite_saver_retention_purge(tmp_path):
     # Purge older checkpoints, keeping only the 2 most recent
     deleted = saver.purge_old_checkpoints(keep_last_n_per_thread=2)
     assert deleted >= 1
+
+
+def test_sqlite_checkpoint_row_swapping_detected(tmp_path):
+    """Verify that moving a valid signed checkpoint from thread A to thread B triggers coordinate mismatch."""
+    import sqlite3
+    db_file = tmp_path / "swap_test.sqlite3"
+    saver = SqliteSaver(db_file)
+    builder = StateGraph(dict)
+    builder.add_node("step", lambda s: {"val": 1})
+    builder.set_entry_point("step")
+    builder.set_finish_point("step")
+    graph = builder.compile(checkpointer=saver)
+
+    graph.invoke({"val": 1}, config={"configurable": {"thread_id": "thread-A"}})
+
+    # Attempt to swap thread_id to thread-B while retaining the valid signature of thread-A
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE checkpoints SET thread_id = 'thread-B' WHERE thread_id = 'thread-A'")
+        conn.commit()
+
+    with pytest.raises(Exception) as excinfo:
+        SqliteSaver(db_file)
+    assert "Integrity check failed" in str(excinfo.value)
+
+
+def test_sqlite_checkpoint_production_key_guard(tmp_path, monkeypatch):
+    """Verify that SqliteSaver enforces a non-default secret key in production."""
+    db_file = tmp_path / "prod_key_test.sqlite3"
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.delenv("CHECKPOINT_SECRET_KEY", raising=False)
+
+    from src.tools.sqlite_checkpoint import CheckpointSecurityError
+    with pytest.raises(CheckpointSecurityError) as excinfo:
+        SqliteSaver(db_file)
+    assert "CHECKPOINT_SECRET_KEY" in str(excinfo.value)

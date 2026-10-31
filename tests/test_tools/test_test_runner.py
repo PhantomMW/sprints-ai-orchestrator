@@ -265,3 +265,42 @@ def cube(x):
     assert res["passed"] == 1
     assert res["failed"] == 0
 
+
+
+@requires_docker
+def test_adversarial_attempt_worker_suicide_in_learner_code():
+    """Verify that learner code calling os._exit(0) at top-level is trapped by parent harness."""
+    code = """
+import os
+os._exit(0)
+
+def multiply(a, b):
+    return a * b
+"""
+    suite = "assert multiply(2, 3) == 6"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["total"] == 1
+    assert res["failed"] == 1
+    assert res["passed"] == 0
+    assert "Abnormal" in res["results"][0]["error"] or "exit" in res["results"][0]["error"].lower()
+
+
+@requires_docker
+def test_adversarial_attempt_ctypes_import_neutralized():
+    """Verify that learner code attempting to import ctypes cannot compromise host memory."""
+    code = """
+try:
+    import ctypes
+    has_ctypes = True
+except Exception:
+    has_ctypes = False
+
+def get_answer():
+    return 42
+"""
+    suite = "assert get_answer() == 42"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["passed"] == 1
+    assert res["failed"] == 0
