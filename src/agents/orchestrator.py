@@ -13,8 +13,35 @@ from src.state import AgentState
 from src.tools.sqlite_checkpoint import SqliteSaver
 
 
+import os
+
 MAX_OPTIMIZATION_ITERATIONS = 3
-TIER_1_EMPLOYERS = {"fawry"}
+
+DEFAULT_TIER_1_EMPLOYERS = {"fawry", "vodafone", "instapay"}
+
+AUTHORIZED_HITL_REVIEWERS = {
+    "career_admin",
+    "placement_lead",
+    "institutional_reviewer",
+    "Director of Placement",
+    "Test Reviewer",
+}
+
+
+def get_tier_1_employers() -> set[str]:
+    """Retrieve configured Tier-1 employers requiring Human-in-the-Loop review."""
+    env_tiers = os.environ.get("TIER_1_EMPLOYERS", "")
+    if env_tiers.strip():
+        return {e.strip().casefold() for e in env_tiers.split(",") if e.strip()}
+    return {e.casefold() for e in DEFAULT_TIER_1_EMPLOYERS}
+
+
+def get_authorized_reviewers() -> set[str]:
+    """Retrieve authorized reviewer identifiers for HITL governance."""
+    env_reviewers = os.environ.get("AUTHORIZED_HITL_REVIEWERS", "")
+    if env_reviewers.strip():
+        return {r.strip().casefold() for r in env_reviewers.split(",") if r.strip()}
+    return {r.casefold() for r in AUTHORIZED_HITL_REVIEWERS}
 
 
 def router_node(state: AgentState) -> dict:
@@ -348,10 +375,8 @@ def requires_human_placement_review(state: AgentState) -> bool:
     else:
         employers = set()
 
-    return bool(
-        employers.intersection(TIER_1_EMPLOYERS)
-        and readiness == "ready for placement"
-    )
+    matched = employers.intersection(get_tier_1_employers())
+    return bool(matched and readiness == "ready for placement")
 
 
 def route_after_evaluation(
@@ -403,7 +428,21 @@ def placement_review_node(state: AgentState) -> dict:
     reviewer = decision.get("reviewer", "") if isinstance(decision, dict) else ""
     comments = decision.get("comments", "") if isinstance(decision, dict) else ""
 
-    decision_label = "APPROVED" if approved else "REJECTED"
+    # Reviewer Authentication & RBAC Governance check
+    authorized_set = get_authorized_reviewers()
+    reviewer_clean = str(reviewer).strip()
+    is_authenticated = bool(reviewer_clean and reviewer_clean.casefold() in authorized_set)
+
+    if approved and not is_authenticated:
+        approved = False
+        decision_label = "REJECTED (UNAUTHORIZED REVIEWER)"
+        comments = (
+            f"Governance Alert: Approval rejected. Reviewer '{reviewer}' is not authorized. "
+            f"Authorized roles: {sorted(authorized_set)}."
+        )
+    else:
+        decision_label = "APPROVED" if approved else "REJECTED"
+
     response = state.get("final_response", "")
     response += (
         f"\n\nHuman placement recommendation review: {decision_label}."
@@ -418,15 +457,28 @@ def placement_review_node(state: AgentState) -> dict:
         "no active vacancy or employer acceptance has been verified."
     )
 
+    # Determine reviewed tier-1 employer dynamically
+    preferred = learner.get("preferred_employers", "")
+    if isinstance(preferred, str):
+        emp_list = [e.strip() for e in preferred.split(",") if e.strip()]
+    elif isinstance(preferred, (list, tuple, set)):
+        emp_list = [str(e).strip() for e in preferred if str(e).strip()]
+    else:
+        emp_list = []
+    
+    tier_1_matched = [e for e in emp_list if e.casefold() in get_tier_1_employers()]
+    employer_label = tier_1_matched[0] if tier_1_matched else "Configured Tier-1 Employer"
+
     return {
         "human_approval_required": True,
         "human_approval": approved,
         "approval_details": {
             "approved": approved,
             "reviewer": reviewer,
+            "reviewer_authenticated": is_authenticated,
             "comments": comments,
             "student_id": review_request["student_id"],
-            "employer_review": "Fawry",
+            "employer_review": employer_label,
             "active_vacancy_verified": False,
         },
         "final_response": response,

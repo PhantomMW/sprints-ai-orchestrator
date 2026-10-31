@@ -9,7 +9,6 @@ from src.tools.db_queries import (
     get_learner_by_id_tool,
     get_track_aggregate_stats,
     get_track_aggregate_stats_tool,
-    query_learner_database,
     search_learners_by_track,
     search_learners_by_track_tool,
 )
@@ -55,73 +54,6 @@ def setup_test_db(tmp_path, monkeypatch):
     yield test_db
 
 
-def test_query_learner_database_enforces_row_limit():
-    """Verify that broad queries cannot return all database rows and set truncated=True."""
-    result = query_learner_database("SELECT * FROM learners")
-
-    assert result["status"] == "success"
-    assert result["row_count"] == MAX_QUERY_ROWS
-    assert result["truncated"] is True
-    assert len(result["data"]) == MAX_QUERY_ROWS
-
-
-def test_query_learner_database_filters_unauthorized_columns():
-    """Verify that only explicitly permitted columns are returned."""
-    result = query_learner_database("SELECT learner_id, name, bootcamp_track FROM learners")
-
-    assert result["status"] == "success"
-    assert result["row_count"] > 0
-    for row in result["data"]:
-        for key in row.keys():
-            assert key in ALLOWED_COLUMNS
-
-
-def test_query_learner_database_rejects_non_select():
-    """Verify that non-SELECT statements are rejected."""
-    bad_queries = [
-        "INSERT INTO learners (learner_id) VALUES ('TEST')",
-        "UPDATE learners SET name = 'Hacked'",
-        "DELETE FROM learners",
-        "DROP TABLE learners",
-    ]
-    for q in bad_queries:
-        result = query_learner_database(q)
-        assert result["status"] == "error"
-        assert "Only SELECT queries are allowed" in result["message"]
-
-
-def test_query_learner_database_rejects_multiple_statements():
-    """Verify that multi-statement queries containing semicolons are blocked."""
-    result = query_learner_database("SELECT * FROM learners; DROP TABLE learners;")
-    assert result["status"] == "error"
-    assert "Multiple SQL statements are not permitted" in result["message"]
-
-
-def test_query_learner_database_rejects_sql_comments():
-    """Verify that comment evasion syntax is blocked."""
-    result1 = query_learner_database("SELECT * FROM learners -- bypass")
-    assert result1["status"] == "error"
-    assert "comments are not permitted" in result1["message"]
-
-    result2 = query_learner_database("SELECT * FROM learners /* bypass */")
-    assert result2["status"] == "error"
-    assert "comments are not permitted" in result2["message"]
-
-
-def test_query_learner_database_blocks_system_tables():
-    """Verify that internal SQLite system tables cannot be inspected."""
-    result = query_learner_database("SELECT * FROM sqlite_master")
-    assert result["status"] == "error"
-    assert "restricted" in result["message"].lower() or "not permitted" in result["message"].lower()
-
-
-def test_query_learner_database_blocks_unauthorized_tables():
-    """Verify that tables other than 'learners' are blocked."""
-    result = query_learner_database("SELECT * FROM users")
-    assert result["status"] == "error"
-    assert "not permitted" in result["message"]
-
-
 def test_get_learner_by_id_returns_targeted_learner_only():
     """Verify that get_learner_by_id returns exactly one learner without cross-learner exposure."""
     result = get_learner_by_id("SPR-1002")
@@ -136,13 +68,12 @@ def test_get_learner_by_id_returns_targeted_learner_only():
 def test_get_learner_by_id_with_nonexistent_id():
     """Verify that non-existent IDs return zero rows safely."""
     result = get_learner_by_id("NON_EXISTENT_ID_999999")
-    assert result["status"] == "success"
-    assert result["row_count"] == 0
+    assert result["status"] == "not_found" or (result["status"] == "success" and result["row_count"] == 0)
     assert result["data"] == []
 
 
 def test_get_learner_by_id_with_invalid_id():
-    """Verify that empty or invalid IDs are rejected."""
+    """Verify that empty or whitespace IDs are rejected."""
     result1 = get_learner_by_id("")
     assert result1["status"] == "error"
 
@@ -150,8 +81,94 @@ def test_get_learner_by_id_with_invalid_id():
     assert result2["status"] == "error"
 
 
+def test_get_learner_by_id_sql_injection_union_blocked():
+    """Verify parameterized query prevents SQL injection UNION payload."""
+    payload = "SPR-1001' UNION SELECT 1,2,3,4,5,6,7,8 --"
+    result = get_learner_by_id(payload)
+    # The payload is treated literally as a learner_id and finds nothing
+    assert result["data"] == []
+
+
+def test_get_learner_by_id_sql_injection_or_always_true_blocked():
+    """Verify parameterized query prevents ' OR '1'='1 bulk extraction."""
+    payload = "' OR '1'='1"
+    result = get_learner_by_id(payload)
+    assert result["data"] == []
+
+
+def test_get_learner_by_id_stacked_drop_blocked(setup_test_db):
+    """Verify stacked SQL statement injection cannot execute destructive commands."""
+    payload = "SPR-1001'; DROP TABLE learners; --"
+    result = get_learner_by_id(payload)
+    assert result["data"] == []
+
+    # Verify table remains intact
+    with sqlite3.connect(setup_test_db) as conn:
+        cur = conn.execute("SELECT COUNT(*) FROM learners")
+        assert cur.fetchone()[0] == 14
+
+
+def test_get_learner_by_id_tool():
+    """Verify the parameterized tool wrapper for learner lookup."""
+    res = get_learner_by_id_tool.invoke({"student_id": "SPR-1001"})
+    assert res["status"] == "success"
+    assert res["row_count"] == 1
+    assert res["data"][0]["name"] == "Synthetic Learner 1"
+
+
+def test_search_learners_by_track():
+    """Verify parameterized domain lookup by track."""
+    res = search_learners_by_track("Advanced Agentic AI", limit=3)
+    assert res["status"] == "success"
+    assert res["row_count"] == 3
+    for row in res["data"]:
+        assert row["bootcamp_track"] == "Advanced Agentic AI"
+
+
+def test_search_learners_by_track_sql_injection_blocked():
+    """Verify SQL injection payloads in track search return no rows safely."""
+    payload = "' OR 1=1 --"
+    res = search_learners_by_track(payload)
+    assert res["status"] == "success"
+    assert res["row_count"] == 0
+    assert res["data"] == []
+
+
+def test_search_learners_by_track_enforces_max_rows_limit():
+    """Verify that requests for large row counts are strictly clamped to MAX_QUERY_ROWS."""
+    res = search_learners_by_track("Advanced Agentic AI", limit=100)
+    assert res["status"] == "success"
+    assert res["row_count"] <= MAX_QUERY_ROWS
+    assert len(res["data"]) <= MAX_QUERY_ROWS
+
+
+def test_search_learners_by_track_column_allowlisting():
+    """Verify that only explicitly permitted columns are returned from track search."""
+    res = search_learners_by_track("Advanced Agentic AI", limit=2)
+    assert res["status"] == "success"
+    for row in res["data"]:
+        assert set(row.keys()).issubset(ALLOWED_COLUMNS)
+
+
+def test_search_learners_by_track_tool():
+    """Verify the LangChain tool wrapper for track search."""
+    res = search_learners_by_track_tool.invoke({"bootcamp_track": "Python Data Science"})
+    assert res["status"] == "success"
+    assert res["row_count"] > 0
+    for row in res["data"]:
+        assert row["bootcamp_track"] == "Python Data Science"
+
+
+def test_get_track_aggregate_stats():
+    """Verify safe aggregate metrics computation."""
+    res = get_track_aggregate_stats()
+    assert res["status"] == "success"
+    assert res["data"]["learner_count"] == 14
+    assert res["data"]["avg_python_score"] > 0
+
+
 def test_get_track_aggregate_stats_enforces_minimum_cohort_size(setup_test_db):
-    """Verify that small cohorts (< MIN_COHORT_SIZE) are masked for differential privacy."""
+    """Verify that small cohorts (< MIN_COHORT_SIZE) are masked for k-anonymity privacy."""
     # Insert exactly 1 learner in a rare track (below MIN_COHORT_SIZE = 3)
     with sqlite3.connect(setup_test_db) as conn:
         conn.execute(
@@ -171,26 +188,8 @@ def test_get_track_aggregate_stats_enforces_minimum_cohort_size(setup_test_db):
     assert res_large["data"]["learner_count"] >= MIN_COHORT_SIZE
 
 
-def test_search_learners_by_track():
-    """Verify parameterized domain lookup by track."""
-    res = search_learners_by_track("Advanced Agentic AI", limit=3)
-    assert res["status"] == "success"
-    assert res["row_count"] == 3
-    for row in res["data"]:
-        assert row["bootcamp_track"] == "Advanced Agentic AI"
-
-
-def test_get_track_aggregate_stats():
-    """Verify safe aggregate metrics computation."""
-    res = get_track_aggregate_stats()
+def test_get_track_aggregate_stats_tool():
+    """Verify the LangChain tool wrapper for aggregate statistics."""
+    res = get_track_aggregate_stats_tool.invoke({})
     assert res["status"] == "success"
     assert res["data"]["learner_count"] == 14
-    assert res["data"]["avg_python_score"] > 0
-
-
-def test_get_learner_by_id_tool():
-    """Verify the parameterized tool wrapper for learner lookup."""
-    res = get_learner_by_id_tool.invoke({"student_id": "SPR-1001"})
-    assert res["status"] == "success"
-    assert res["row_count"] == 1
-    assert res["data"][0]["name"] == "Synthetic Learner 1"

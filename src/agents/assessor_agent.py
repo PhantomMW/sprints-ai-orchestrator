@@ -24,10 +24,14 @@ def assess_python_code(
     """
     Execute, test, and assess a learner's Python submission.
 
-    Combines:
-        1. Automated deterministic test runner verification.
-        2. Sandbox execution output capture.
-        3. Gemini qualitative code evaluation.
+    Unified Execution & Single-Pass Optimization:
+        - When a test suite or expected output is provided, the automated test runner executes
+          the code inside Docker once with true OS process isolation, capturing execution
+          metrics and evaluating all assertions without duplicate container spin-ups.
+        - If no assertions are provided, execution is handled directly via python_repl_tool.
+        - Fail-Closed Safety: Aborts grading immediately with an error response before calling
+          Gemini if the test runner or execution encounters technical failures.
+        - Gemini qualitative code evaluation grounded in deterministic test metrics.
 
     Args:
         code: Python code submitted by the learner.
@@ -38,13 +42,20 @@ def assess_python_code(
     Returns:
         Structured grading feedback, deterministic test metrics, or error.
     """
+    # 1. Deterministic unit test verification (or execution capture)
+    test_metrics = run_automated_tests(
+        code=code,
+        test_suite=test_suite,
+        expected_output=expected_output,
+    )
 
-    # 1. Base execution in Docker sandbox
-    execution_result = python_repl_tool.invoke({
-        "code": code
-    })
+    # 2. Extract execution result from test runner, or execute via repl tool if not present
+    execution_result = test_metrics.get("execution")
+    if not execution_result:
+        execution_result = python_repl_tool.invoke({"code": code})
 
-    if execution_result.get("status") != "success":
+    # Fail-closed on base execution failure
+    if execution_result.get("status") != "success" and test_metrics.get("status") != "unverified":
         return {
             "status": "error",
             "message": "Unable to verify: Python execution failed.",
@@ -58,18 +69,20 @@ def assess_python_code(
             },
         }
 
-    # 2. Automated Test Runner (Deterministic unit test verification)
-    test_metrics = run_automated_tests(
-        code=code,
-        test_suite=test_suite,
-        expected_output=expected_output,
-    )
-
-    # Fail-closed: technical failure of the test runner halts grading before LLM invocation
+    # Fail-closed on test runner technical failure
     if test_metrics.get("status") == "error":
         return {
             "status": "error",
             "message": f"Unable to verify: Automated test runner execution failed: {test_metrics.get('message', 'Runner failure')}",
+            "execution": execution_result,
+            "test_runner": test_metrics,
+        }
+
+    # Base execution failure when no tests were provided
+    if execution_result.get("status") != "success":
+        return {
+            "status": "error",
+            "message": "Unable to verify: Python execution failed.",
             "execution": execution_result,
             "test_runner": test_metrics,
         }

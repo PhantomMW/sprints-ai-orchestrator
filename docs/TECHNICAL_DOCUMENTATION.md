@@ -535,31 +535,32 @@ harness executing deterministic unit test assertions inside the Docker sandbox.
 
 Its security and isolation architecture includes:
 
-- **Per-Test Namespace Isolation:** Learner code is pre-compiled via `compile()`, and each
+- **Single Code Execution:** The learner's code is executed exactly once in the Docker sandbox,
 
-  assertion case executes within a fresh, isolated namespace (`_test_ns = {"__builtins__": __builtins__, ...}`),
+  capturing standard output and exported variables without redundant re-runs.
 
-  preventing state leakage between individual tests.
+- **True OS Process Isolation via `os.fork()`:** Inside the Linux container, each unit assertion case is executed
 
-- **Safe Builtins Pre-Binding:** Critical primitives (`_safe_sys`, `_safe_json_dumps`, `_safe_StringIO`, `_safe_BaseException`)
+  within its own dedicated child process via `os.fork()` and pipe IPC. Memory is isolated via copy-on-write,
 
-  are bound to local variables upfront, preventing learner code from monkey-patching reporting internals.
+  ensuring complete process boundary separation between individual tests.
 
-- **BaseException & SystemExit Trapping:** Catches `BaseException` (specifically `SystemExit`), preventing
+- **Anti-Tampering & Exit Trapping:** If student code calls `os._exit()`, `sys.exit()`, or crashes with a segfault,
 
-  learner code from invoking `sys.exit()` to terminate the test runner harness.
+  only the child process terminates. The parent harness collects the exit status via `os.waitpid()` and records
 
-- **Anti-Tampering Delimiters:** Emits metric payloads enclosed in random session delimiters
+  a structured test failure without aborting the evaluation suite.
 
-  (`###TEST_METRICS_START_<UUID>### ... ###TEST_METRICS_END_<UUID>###`) to prevent student stdout spoofing.
+- **Pre-Bound Safe Primitives:** Primitives (`_safe_os`, `_safe_sys`, `_safe_json_dumps`) are bound to private
 
-- **Dual Assertion & Stdout Verification:** Evaluates explicit unit assertions (`test_suite`) and expected
+  references upfront, preventing untrusted code from modifying reporting internals.
 
-  standard output (`expected_output`) concurrently.
+- **Dual Assertion & Stdout Verification:** Concurrently evaluates explicit unit assertions (`test_suite`) and expected
 
-- **Unverified State:** Emits `status: "unverified"` when no assertions or expected outputs are provided,
+  standard output (`expected_output`).
 
-  avoiding synthetic pass claims.
+- **Unverified State:** Emits `status: "unverified"` when no assertions or expected outputs are provided.
+
 
 `src/agents/assessor_agent.py` enforces strict programmatic guardrails:
 
@@ -764,6 +765,25 @@ not verify a live vacancy, confirm employer acceptance, contact the
 
 employer, or submit an application.
 
+**Reviewer Authentication & RBAC Governance:**
+
+To prevent unauthorized placement decisions before institutional deployment, `placement_review_node`
+
+enforces reviewer authentication against `AUTHORIZED_HITL_REVIEWERS` (configurable via environment variable).
+
+If an approval is submitted by an unauthenticated or unauthorized reviewer, governance automatically
+
+overrides the decision to rejected (`REJECTED (UNAUTHORIZED REVIEWER)`), logs a security governance alert,
+
+and records `reviewer_authenticated: False` in the audit trace.
+
+**Configurable Tier-1 Employers:**
+
+Qualifying placement review triggers are configurable dynamically via the `TIER_1_EMPLOYERS` environment
+
+variable (default: `fawry,vodafone,instapay`), allowing flexible institutional alignment without code modifications.
+
+
 
 
 ### Persistent Checkpointing
@@ -819,21 +839,24 @@ parameterized domain tools:
 
 - `get_track_aggregate_stats_tool`: aggregate cohort statistics with differential privacy enforcement.
 
-**Differential Privacy & Minimum Cohort Size:**
+**k-Anonymity Cohort Threshold & Aggregation Privacy:**
 
-To prevent learner re-identification in sparse tracks, `get_track_aggregate_stats()` enforces
+To prevent individual learner re-identification in sparse tracks, `get_track_aggregate_stats()` enforces
 
-`MIN_COHORT_SIZE = 3`. If a requested track contains fewer than 3 enrolled learners, the tool
+a k-anonymity cohort threshold (`MIN_COHORT_SIZE = 3`). If a requested track contains fewer than 3 enrolled
 
-withholds individual metrics, returning `status: "error"` and `privacy_restricted: True`.
+learners, the tool withholds individual aggregate metrics, returning `status: "error"` and `privacy_restricted: True`.
 
-**Underlying Query Safeguards:**
+*Clarification on Privacy Terminology:* This control implements k-anonymity for cohort aggregation. It is distinct
 
-The underlying helper opens the database in read-only mode (`mode=ro`), caps returned rows
+from mathematical ε-differential privacy, which requires injecting calibrated Laplacian or Gaussian noise into output distributions.
 
-at 5 (`MAX_QUERY_ROWS = 5`), enforces an explicit column allowlist, and rejects SQL comments and
+**Zero Arbitrary SQL Functions:**
 
-internal metadata queries (`sqlite_master`, `pragma`).
+Raw SQL query execution functions (`query_learner_database`, `learner_sql_tool`) have been removed completely from
+
+the source code. All database interactions strictly execute via parameterized domain functions with `mode=ro`.
+
 
 
 
@@ -1010,21 +1033,25 @@ Automated tests should use mocks and should not require a live API key.
 
 ## 14. Testing
 
-The test suite contains **57 automated tests** across 8 test suites spanning agent workflows, domain tools, and sandbox execution:
+The test suite contains **63 automated tests** across 10 test suites spanning agent workflows, domain tools, logging, and sandbox execution:
 
 - `tests/test_agents/test_agentic_rag.py` (2 tests): validates Agentic RAG retry behavior and sufficiency stopping.
 
 - `tests/test_agents/test_evaluator_optimizer.py` (2 tests): validates iteration limits and optimization convergence.
 
-- `tests/test_agents/test_orchestrator_evaluator.py` (5 tests): validates LangGraph routing, assessment evaluator routing, and Human-in-the-Loop interrupt/resume cycles.
+- `tests/test_agents/test_orchestrator_evaluator.py` (6 tests): validates LangGraph routing, assessment evaluator routing, Human-in-the-Loop interrupt/resume cycles, and reviewer authentication RBAC rejection.
 
-- `tests/test_agents/test_assessor_agent.py` (4 tests): validates automated unit test runner integration, execution failure handling, fail-closed runner crash abortion, and deterministic assertion failure score capping.
+- `tests/test_agents/test_assessor_agent.py` (4 tests): validates single-pass automated unit test runner integration, execution failure handling, fail-closed runner crash abortion, and deterministic assertion failure score capping.
 
-- `tests/test_tools/test_db_queries.py` (14 tests): validates bounded query limits (max 5 rows), column allowlisting, non-SELECT rejection, multi-statement blocking, SQL comment prevention, system table protection, parameterized single-learner isolation, and minimum cohort size (`MIN_COHORT_SIZE = 3`) differential privacy.
+- `tests/test_agents/test_live_gemini_integration.py` (1 test): validates live Google Gemini API connectivity and structured generation when live credentials are provided.
 
-- `tests/test_tools/test_test_runner.py` (12 tests): validates test parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, namespace isolation, and fake metrics delimiter protection.
+- `tests/test_tools/test_db_queries.py` (15 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, and k-anonymity cohort threshold (`MIN_COHORT_SIZE = 3`).
 
-- `tests/test_tools/test_sqlite_checkpoint.py` (4 tests): validates cross-instance state persistence, thread isolation, 10-thread concurrent writes with WAL mode, and durable Human-in-the-Loop resumption across simulated process restarts.
+- `tests/test_tools/test_test_runner.py` (12 tests): validates test parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), and fake metrics delimiter protection.
+
+- `tests/test_tools/test_sqlite_checkpoint.py` (5 tests): validates cross-instance state persistence, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, and true cross-process persistence spanning separate OS Python processes.
+
+- `tests/test_tools/test_logger.py` (2 tests): validates structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 
 - `tests/test_tools/test_docker_executor.py` (14 tests): validates bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
@@ -1037,6 +1064,7 @@ pytest -v
 ```
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request with 100% pass rate.
+
 
 
 
@@ -1120,7 +1148,7 @@ Continuous Integration is automated via GitHub Actions (`.github/workflows/tests
 
                           tool test suite         integration benchmarks
 
-                          (57 tests passed; CI)
+                          (63 tests passed; CI)
 
 
 

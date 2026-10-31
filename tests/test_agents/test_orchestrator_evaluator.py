@@ -3,7 +3,7 @@ from unittest.mock import patch
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
-from src.agents.orchestrator import orchestrator
+from src.agents.orchestrator import build_orchestrator, orchestrator
 
 
 def _successful_evaluator_result(response: str) -> dict:
@@ -273,3 +273,49 @@ def test_hitl_pauses_and_resumes_when_reviewer_rejects():
         "Needs more evidence before referral."
     )
     assert "REJECTED" in resumed_result["final_response"]
+
+
+def test_hitl_rejects_unauthorized_reviewer():
+    """Verify that approval from an unauthorized reviewer is rejected by governance."""
+    orchestrator = build_orchestrator()
+    config = {"configurable": {"thread_id": "test-unauth-reviewer"}}
+
+    with (
+        patch(
+            "src.agents.orchestrator.generate_career_advice",
+            return_value=_eligible_advisor_result(),
+        ),
+        patch(
+            "src.agents.orchestrator.evaluate_and_optimize",
+            return_value=_successful_evaluator_result("Career recommendation."),
+        ),
+    ):
+        paused_result = orchestrator.invoke(
+            {
+                "student_id": "SPR-1001",
+                "request_type": "advisor",
+                "messages": [HumanMessage(content="Check placement.")],
+            },
+            config,
+        )
+
+        assert paused_result.get("__interrupt__")
+
+        # Attempt approval by unauthorized user
+        resumed_result = orchestrator.invoke(
+            Command(
+                resume={
+                    "approved": True,
+                    "reviewer": "unauthorized_external_user",
+                    "comments": "Attempting unauthorized approval.",
+                }
+            ),
+            config,
+        )
+
+    assert resumed_result["human_approval_required"] is True
+    # Governance must have forced approved=False
+    assert resumed_result["human_approval"] is False
+    assert resumed_result["approval_details"]["approved"] is False
+    assert resumed_result["approval_details"]["reviewer_authenticated"] is False
+    assert "REJECTED (UNAUTHORIZED REVIEWER)" in resumed_result["final_response"]

@@ -2,7 +2,7 @@
 ## Sprints Multi-Agent AI Career & Assessment Orchestrator
 
 **Target duration:** 3 to 5 minutes  
-**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 57 passing tests and GitHub Actions CI.
+**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 63 passing tests and GitHub Actions CI.
 
 ---
 
@@ -49,11 +49,11 @@ Once the profile is loaded, the Career Advisor initiates an **Agentic RAG loop**
 To ensure evaluation integrity and runtime safety, we implemented a two-tier assessment pipeline:
 
 1. **Automated Test Runner with Anti-Tampering Protection:**  
-   Rather than relying purely on LLM subjective grading, submissions undergo deterministic unit testing with complete anti-tampering protection:
-   - Pre-compiles learner code upfront, catching syntax and compilation errors.
-   - Executes each assertion case within a completely isolated namespace, preventing state pollution.
-   - Pre-binds safe builtins (`_safe_sys`, `_safe_json_dumps`, etc.) to protect runner internals.
-   - Traps `BaseException` and `SystemExit`, preventing learner code from terminating the test harness via `sys.exit()`.
+   Rather than relying purely on LLM subjective grading, submissions undergo deterministic unit testing with True OS Process Isolation and single-pass execution:
+   - Pre-compiles and executes learner code exactly once, capturing stdout/stderr without redundant re-runs.
+   - Executes each unit assertion in a dedicated child process (`os.fork()` on Linux with copy-on-write memory and pipe IPC), providing true operating system process isolation.
+   - Pre-binds safe builtins (`_safe_os`, `_safe_sys`, `_safe_json_dumps`) to protect runner internals.
+   - Traps `os._exit()`, `sys.exit()`, and process crashes safely via parent `os.waitpid()` without aborting the harness.
    - Frames test metrics with random UUID session delimiters to eliminate student stdout spoofing.
    - Evaluates unit assertions and expected stdout concurrently.
    - If unit assertions fail, programmatic guardrails automatically cap the score at 50/100 and enforce a failing status.
@@ -80,7 +80,11 @@ Our demo evaluates both an optimal list-average implementation and an error-pron
 - If quality falls below threshold, the optimizer refines the response (capped at a hard maximum of 3 iterations).
 - Immutable facts—such as Docker execution outputs and unit test scores—are strictly preserved during optimization.
 
-The system features a **Dual Checkpointing Architecture**: `build_orchestrator()` defaults to `MemorySaver()` for isolated, lightning-fast unit tests, while `main.py` (CLI & Demo) initializes **`SqliteSaver`**, a durable SQLite-backed checkpointer storing workflow states in `data/orchestrator_checkpoints.sqlite3` with Write-Ahead Logging (WAL) and 5-second busy timeout. This allows long-running sessions and Human-in-the-Loop workflows to pause, persist across application restarts, and resume seamlessly."
+The system features a **Dual Checkpointing Architecture** and **Institutional Governance**:
+- `build_orchestrator()` defaults to `MemorySaver()` for isolated, lightning-fast unit tests.
+- `main.py` initializes **`SqliteSaver`**, a durable SQLite-backed checkpointer storing workflow states in `data/orchestrator_checkpoints.sqlite3` with Write-Ahead Logging (WAL) and 5-second busy timeout, verified across real separate OS processes.
+- **Reviewer Authentication & RBAC Governance:** Validates reviewer roles (`AUTHORIZED_HITL_REVIEWERS`), rejecting unauthorized approval attempts automatically.
+- **Configurable Employer Tiers:** Qualifying placement review triggers are configurable via the `TIER_1_EMPLOYERS` environment variable (default: `fawry,vodafone,instapay`)."
 
 **Visual Action:** Showcase CLI Step 3 displaying Evaluator-Optimizer iterations and persistent checkpoint thread IDs.
 
@@ -132,7 +136,7 @@ Before presenting, ensure:
 - [ ] Virtual environment active: `.\.venv\Scripts\activate`
 - [ ] Docker Desktop running with Linux engine: `docker info`
 - [ ] Sandbox image built: `docker images sprints-python-sandbox:latest`
-- [ ] Run full test suite: `pytest -v` (verify 57 passed)
+- [ ] Run full test suite: `pytest -v` (verify 63 passed)
 - [ ] Run automated demo: `python src/main.py --mode demo`
 - [ ] Run interactive mode (optional): `python src/main.py --mode interactive`
 - [ ] Verify `SYN-DEMO-01` synthetic profile is loaded with zero personal data leakage.

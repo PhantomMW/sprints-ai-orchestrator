@@ -186,3 +186,62 @@ def test_sqlite_saver_hitl_resumption_across_process_restart(tmp_path):
     assert resumed_result["approval_details"]["reviewer"] == "Director of Placement"
     assert "Approved after system restart verification." in resumed_result["approval_details"]["comments"]
     assert "Human placement recommendation review: APPROVED" in resumed_result["final_response"]
+
+
+def test_sqlite_saver_real_os_subprocess_persistence(tmp_path):
+    """
+    Verify durable persistence across real, separate OS Python processes:
+    Process 1: Runs graph, persists state to SQLite file on disk, and terminates.
+    Process 2: A distinct OS Python interpreter launches, reads the SQLite file,
+               and verifies the exact persisted state.
+    """
+    import subprocess
+    import sys
+
+    db_path = str(tmp_path / "real_subprocess_checkpoints.sqlite3")
+
+    script_proc1 = f"""
+import sys
+from langgraph.graph import StateGraph
+from src.tools.sqlite_checkpoint import SqliteSaver
+
+saver = SqliteSaver(r"{db_path}")
+builder = StateGraph(dict)
+builder.add_node("step1", lambda s: {{"val": s.get("val", 0) + 100}})
+builder.set_entry_point("step1")
+builder.set_finish_point("step1")
+graph = builder.compile(checkpointer=saver)
+
+cfg = {{"configurable": {{"thread_id": "cross-process-thread-42"}}}}
+res = graph.invoke({{"val": 50}}, config=cfg)
+assert res["val"] == 150
+sys.exit(0)
+"""
+
+    script_proc2 = f"""
+import sys
+from langgraph.graph import StateGraph
+from src.tools.sqlite_checkpoint import SqliteSaver
+
+saver = SqliteSaver(r"{db_path}")
+builder = StateGraph(dict)
+builder.add_node("step2", lambda s: {{"val": s.get("val", 0) + 50}})
+builder.set_entry_point("step2")
+builder.set_finish_point("step2")
+graph = builder.compile(checkpointer=saver)
+
+cfg = {{"configurable": {{"thread_id": "cross-process-thread-42"}}}}
+state = graph.get_state(cfg)
+assert state is not None
+assert state.values["val"] == 150
+
+res = graph.invoke({{"val": state.values["val"]}}, config=cfg)
+assert res["val"] == 200
+sys.exit(0)
+"""
+
+    p1 = subprocess.run([sys.executable, "-c", script_proc1], capture_output=True, text=True)
+    assert p1.returncode == 0, f"Process 1 failed:\nSTDOUT: {p1.stdout}\nSTDERR: {p1.stderr}"
+
+    p2 = subprocess.run([sys.executable, "-c", script_proc2], capture_output=True, text=True)
+    assert p2.returncode == 0, f"Process 2 failed:\nSTDOUT: {p2.stdout}\nSTDERR: {p2.stderr}"

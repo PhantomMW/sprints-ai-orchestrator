@@ -1,4 +1,3 @@
-import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,8 @@ from langchain.tools import tool
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "sprints_learners.sqlite3"
 
 MAX_QUERY_ROWS = 5
+
+MIN_COHORT_SIZE = 3
 
 ALLOWED_TABLES = {"learners"}
 
@@ -23,17 +24,6 @@ ALLOWED_COLUMNS = {
     "readiness_status",
 }
 
-FORBIDDEN_SQL_PATTERNS = [
-    (r";", "Multiple SQL statements are not permitted."),
-    (r"--", "SQL single-line comments are not permitted."),
-    (r"/\*", "SQL multi-line comments are not permitted."),
-    (r"\bsqlite_master\b", "Access to SQLite system metadata is restricted."),
-    (r"\bsqlite_schema\b", "Access to SQLite system metadata is restricted."),
-    (r"\bsqlite_temp_master\b", "Access to SQLite system metadata is restricted."),
-    (r"\bpragma\b", "PRAGMA statements are not permitted."),
-    (r"\battach\b", "ATTACH statements are not permitted."),
-]
-
 
 def _ensure_db_exists() -> bool:
     """Check if the configured SQLite database file exists on disk."""
@@ -41,22 +31,24 @@ def _ensure_db_exists() -> bool:
 
 
 # ==============================================================================
-# P0: Safe Parameterized Domain Operations (Recommended over raw SQL)
+# Safe Parameterized Domain Operations (Strictly No Arbitrary SQL Execution)
 # ==============================================================================
 
 def get_learner_by_id(student_id: str) -> dict[str, Any]:
     """
     Retrieve an individual learner profile using a safe, parameterized SQL query.
 
-    This is the primary and recommended method for retrieving learner data.
-    It guarantees strict single-learner isolation, parameterized safety, and
-    prevents unintended access or cross-learner data leakage.
+    Privacy and Security Controls:
+        - Uses strictly parameterized queries (? placeholder).
+        - Enforces targeted, single-learner isolation: returns exactly one record.
+        - Never executes arbitrary SQL strings or broad SELECT * scans.
+        - Database connection opened in read-only mode (mode=ro).
 
     Args:
-        student_id: Unique learner identifier.
+        student_id: Learner identifier (e.g. 'SYN-DEMO-01').
 
     Returns:
-        Verified learner profile dictionary or an error response.
+        Dictionary with status 'success' and learner data in a bounded list.
     """
     if not isinstance(student_id, str) or not student_id.strip():
         return {
@@ -125,6 +117,12 @@ def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -
     """
     Retrieve learners enrolled in a specific bootcamp track using a parameterized query.
 
+    Privacy and Security Controls:
+        - Uses strictly parameterized queries (? placeholder).
+        - Capped at MAX_QUERY_ROWS (5) to prevent bulk extraction.
+        - Column projection restricted to verified ALLOWED_COLUMNS.
+        - Database opened in read-only mode (mode=ro).
+
     Args:
         bootcamp_track: Track name (e.g. 'Advanced Agentic AI').
         limit: Maximum rows to return (capped at MAX_QUERY_ROWS).
@@ -167,20 +165,26 @@ def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -
     """
 
     try:
-        with sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(
+            f"file:{DB_PATH.as_posix()}?mode=ro",
+            uri=True
+        ) as conn:
             conn.row_factory = sqlite3.Row
-            cursor = conn.execute(query, (clean_track, effective_limit + 1))
-            raw_rows = cursor.fetchall()
-            truncated = len(raw_rows) > effective_limit
-            selected_rows = [dict(r) for r in raw_rows[:effective_limit]]
+            cursor = conn.execute(query, (clean_track, effective_limit))
+            rows = [dict(row) for row in cursor.fetchall()]
+
+            sanitized_rows = []
+            for row in rows:
+                sanitized_rows.append(
+                    {k: v for k, v in row.items() if k in ALLOWED_COLUMNS}
+                )
 
             return {
                 "status": "success",
-                "row_count": len(selected_rows),
-                "max_rows": effective_limit,
-                "truncated": truncated,
-                "data": selected_rows,
+                "row_count": len(sanitized_rows),
+                "data": sanitized_rows,
             }
+
     except sqlite3.Error as error:
         return {
             "status": "error",
@@ -190,20 +194,22 @@ def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -
         }
 
 
-MIN_COHORT_SIZE = 3
-
-
 def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, Any]:
     """
-    Retrieve safe aggregate metrics (count, average score) without exposing raw rows.
+    Compute aggregate performance metrics across a track or all tracks.
 
-    Privacy Controls:
-        - Minimum Cohort Size (k-anonymity): requires at least MIN_COHORT_SIZE (3)
-          learners before returning aggregate averages, preventing individual identification
-          in sparse or single-learner tracks.
+    Privacy Controls (k-Anonymity Cohort Threshold):
+        - Enforces MIN_COHORT_SIZE = 3: If fewer than 3 learners exist in a cohort,
+          individual statistics are withheld (privacy_restricted=True) to prevent
+          re-identification of individuals in sparse groups.
+        - Only returns aggregated averages and counts; no row-level records are exposed.
+        - Database opened in read-only mode (mode=ro).
 
     Args:
         bootcamp_track: Optional track filter.
+
+    Returns:
+        Dictionary containing cohort count and average scores, or privacy restriction.
     """
     if not _ensure_db_exists():
         return {
@@ -213,49 +219,71 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
         }
 
     try:
-        with sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(
+            f"file:{DB_PATH.as_posix()}?mode=ro",
+            uri=True
+        ) as conn:
             conn.row_factory = sqlite3.Row
+
             if bootcamp_track:
+                count_sql = "SELECT COUNT(*) as count FROM learners WHERE LOWER(bootcamp_track) = LOWER(?)"
+                cursor = conn.execute(count_sql, (bootcamp_track.strip(),))
+                cohort_count = cursor.fetchone()["count"]
+
+                if cohort_count < MIN_COHORT_SIZE:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Cohort size ({cohort_count}) is below minimum privacy threshold "
+                            f"({MIN_COHORT_SIZE}). Aggregation restricted to prevent identification."
+                        ),
+                        "data": {
+                            "privacy_restricted": True,
+                            "min_cohort_size": MIN_COHORT_SIZE,
+                            "cohort_count": cohort_count,
+                        },
+                    }
+
                 query = """
                     SELECT
+                        bootcamp_track,
                         COUNT(*) as learner_count,
                         ROUND(AVG(python_assignment_score), 2) as avg_python_score,
-                        ROUND(AVG(target_salary_egp), 2) as avg_target_salary,
                         ROUND(AVG(completed_modules), 2) as avg_completed_modules
                     FROM learners
                     WHERE LOWER(bootcamp_track) = LOWER(?)
+                    GROUP BY bootcamp_track
                 """
                 cursor = conn.execute(query, (bootcamp_track.strip(),))
             else:
+                count_sql = "SELECT COUNT(*) as count FROM learners"
+                cursor = conn.execute(count_sql)
+                cohort_count = cursor.fetchone()["count"]
+
+                if cohort_count < MIN_COHORT_SIZE:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Total cohort size ({cohort_count}) is below minimum privacy threshold "
+                            f"({MIN_COHORT_SIZE}). Aggregation restricted."
+                        ),
+                        "data": {
+                            "privacy_restricted": True,
+                            "min_cohort_size": MIN_COHORT_SIZE,
+                            "cohort_count": cohort_count,
+                        },
+                    }
+
                 query = """
                     SELECT
                         COUNT(*) as learner_count,
                         ROUND(AVG(python_assignment_score), 2) as avg_python_score,
-                        ROUND(AVG(target_salary_egp), 2) as avg_target_salary,
                         ROUND(AVG(completed_modules), 2) as avg_completed_modules
                     FROM learners
                 """
                 cursor = conn.execute(query)
 
             row = cursor.fetchone()
-            count = row["learner_count"] if row else 0
-
-            # Privacy protection: suppress averages if cohort is smaller than MIN_COHORT_SIZE
-            if count < MIN_COHORT_SIZE:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Cohort size ({count}) is below the minimum privacy threshold "
-                        f"({MIN_COHORT_SIZE}) required for aggregate metrics."
-                    ),
-                    "min_cohort_size": MIN_COHORT_SIZE,
-                    "learner_count": count,
-                    "data": {
-                        "learner_count": count,
-                        "privacy_restricted": True,
-                    },
-                }
-
             data_dict = dict(row) if row else {}
             data_dict["privacy_restricted"] = False
             data_dict["min_cohort_size"] = MIN_COHORT_SIZE
@@ -272,114 +300,8 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
 
 
 # ==============================================================================
-# General Query Interface with Strict Structural Bounds
+# LangChain Tool Bindings for Agent Integration
 # ==============================================================================
-
-def query_learner_database(sql_query: str) -> dict[str, Any]:
-    """
-    Execute a bounded, read-only SQL query against the Sprints learner database.
-
-    Privacy and Security Controls:
-        - Only SELECT statements are permitted.
-        - Multiple statements and comment sequences are forbidden.
-        - System metadata tables (sqlite_master, pragma) are blocked.
-        - Queries are restricted to the allowed 'learners' table.
-        - Maximum returned rows capped at MAX_QUERY_ROWS (5) to prevent bulk export.
-        - Disallowed or unauthorized columns are strictly filtered from output.
-        - For single learner lookups, get_learner_by_id() must be used instead.
-
-    Args:
-        sql_query: SQL SELECT query.
-
-    Returns:
-        Dictionary containing bounded query results or an error message.
-    """
-    if not isinstance(sql_query, str) or not sql_query.strip():
-        return {
-            "status": "error",
-            "message": "Empty or invalid SQL query.",
-            "row_count": 0,
-            "data": [],
-        }
-
-    if not _ensure_db_exists():
-        return {
-            "status": "error",
-            "message": "Learner database file is not available.",
-            "row_count": 0,
-            "data": [],
-        }
-
-    normalized_query = sql_query.strip()
-    lowered_query = normalized_query.lower()
-
-    if not lowered_query.startswith("select"):
-        return {
-            "status": "error",
-            "message": "Only SELECT queries are allowed.",
-            "row_count": 0,
-            "data": [],
-        }
-
-    for pattern, reason in FORBIDDEN_SQL_PATTERNS:
-        if re.search(pattern, lowered_query):
-            return {
-                "status": "error",
-                "message": f"Query rejected: {reason}",
-                "row_count": 0,
-                "data": [],
-            }
-
-    from_match = re.search(r"\bfrom\s+([a-zA-Z0-9_]+)", lowered_query)
-    if from_match:
-        table_name = from_match.group(1)
-        if table_name not in ALLOWED_TABLES:
-            return {
-                "status": "error",
-                "message": f"Access to table '{table_name}' is not permitted. Allowed tables: {list(ALLOWED_TABLES)}.",
-                "row_count": 0,
-                "data": [],
-            }
-
-    try:
-        with sqlite3.connect(
-            f"file:{DB_PATH.as_posix()}?mode=ro",
-            uri=True
-        ) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(normalized_query)
-
-            raw_rows = cursor.fetchmany(MAX_QUERY_ROWS + 1)
-            truncated = len(raw_rows) > MAX_QUERY_ROWS
-            selected_rows = raw_rows[:MAX_QUERY_ROWS]
-
-            sanitized_rows = []
-            for row in selected_rows:
-                row_dict = dict(row)
-                filtered = {k: v for k, v in row_dict.items() if k in ALLOWED_COLUMNS}
-                sanitized_rows.append(filtered)
-
-            return {
-                "status": "success",
-                "row_count": len(sanitized_rows),
-                "max_rows": MAX_QUERY_ROWS,
-                "truncated": truncated,
-                "data": sanitized_rows,
-            }
-
-    except sqlite3.Error as error:
-        return {
-            "status": "error",
-            "message": f"Unable to verify: {error}",
-            "row_count": 0,
-            "data": [],
-        }
-
-
-# Legacy query tool removed from Agent registry.
-# All agents must use parameterized operations: get_learner_by_id_tool,
-# search_learners_by_track_tool, and get_track_aggregate_stats_tool.
-
 
 @tool
 def get_learner_by_id_tool(student_id: str) -> dict[str, Any]:

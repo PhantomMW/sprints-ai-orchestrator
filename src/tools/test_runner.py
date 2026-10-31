@@ -30,19 +30,21 @@ def run_automated_tests(
     expected_output: str = "",
 ) -> dict[str, Any]:
     """
-    Execute deterministic unit tests against a learner's Python submission.
+    Execute deterministic unit tests against a learner's Python submission with
+    true OS process isolation and single code execution.
 
-    Isolation & Validation Controls:
+    Isolation & Verification Architecture:
         - Executes inside an isolated, non-root Docker container prototype.
-        - Randomized session token delimits test metrics from arbitrary student output.
-        - Per-test namespace isolation: each test case executes against a clean,
-          independent global namespace preventing state pollution between assertions.
-        - Catches BaseException (including SystemExit) to prevent student code from
-          aborting the test harness prematurely.
-        - Safe reference binding protects json and sys channels from student tampering.
-        - Concurrently evaluates both unit assertions and expected stdout matching
-          when both are provided.
-        - Unverified state: if neither assertions nor expected output are provided,
+        - Single Code Execution: The learner's code is executed once to capture base stdout,
+          stderr, and export its globals, avoiding redundant re-runs.
+        - True OS Process Isolation: When running in Linux (Docker container), each test
+          assertion executes within a dedicated child process (`os.fork()`), providing complete
+          copy-on-write memory and process-level isolation.
+        - Anti-Tampering: If student code or an assertion calls `sys.exit()` or `os._exit()`,
+          or causes a segfault, only the child process terminates; the runner harness survives
+          and records the test failure.
+        - Concurrently evaluates both unit assertions and expected stdout matching.
+        - Unverified state: If neither assertions nor expected output are provided,
           returns an explicit 'unverified' status instead of fabricating false passes.
 
     Args:
@@ -52,7 +54,7 @@ def run_automated_tests(
 
     Returns:
         Structured test metrics dictionary including status, total, passed,
-        failed, percentage, and individual test case outcomes.
+        failed, percentage, captured stdout, and individual test case outcomes.
     """
     if not isinstance(code, str) or not code.strip():
         return {
@@ -63,6 +65,7 @@ def run_automated_tests(
             "failed": 0,
             "percentage": 0.0,
             "results": [],
+            "execution": {"status": "error", "error": "Empty submission"},
         }
 
     test_cases: list[tuple[str, str]] = []
@@ -99,16 +102,19 @@ def run_automated_tests(
 
     # Python harness script executed inside the Docker container
     harness = f"""
+import os
 import sys
 import io
 import json
 
 # Bind safe primitives before executing untrusted student code
+_safe_os = os
 _safe_sys = sys
 _safe_json_dumps = json.dumps
 _safe_StringIO = io.StringIO
 _safe_BaseException = BaseException
 _safe_orig_stdout = sys.stdout
+_safe_has_fork = hasattr(os, "fork")
 
 _code_str = {repr(code)}
 _start_marker = {repr(start_marker)}
@@ -124,17 +130,21 @@ except _safe_BaseException as _ce:
     _compilation_error = f"{{type(_ce).__name__}}: {{_ce}}"
 
 _captured_stdout = ""
+_base_globals = {{"__builtins__": __builtins__}}
+
 if not _compilation_error:
     _io_buf = _safe_StringIO()
     _safe_sys.stdout = _io_buf
     try:
-        _smoke_ns = {{"__builtins__": __builtins__}}
-        exec(_compiled_code, _smoke_ns)
+        # Execute student code ONCE to capture stdout and populate namespace
+        exec(_compiled_code, _base_globals)
     except _safe_BaseException as _re:
         _compilation_error = f"{{type(_re).__name__}}: {{_re}}"
     finally:
         _safe_sys.stdout = _safe_orig_stdout
         _captured_stdout = _io_buf.getvalue()
+
+_base_globals["_captured_stdout"] = _captured_stdout
 
 _results = []
 if _compilation_error:
@@ -142,20 +152,55 @@ if _compilation_error:
         _results.append({{"name": _name, "status": "FAILED", "error": _compilation_error}})
 else:
     for _name, _case_src in _test_cases:
-        # Provide clean, independent namespace per test case (true isolation)
-        _test_ns = {{
-            "__builtins__": __builtins__,
-            "_captured_stdout": _captured_stdout,
-        }}
-        try:
-            exec(_compiled_code, _test_ns)
-            exec(_case_src, _test_ns)
-            _results.append({{"name": _name, "status": "PASSED", "error": ""}})
-        except AssertionError as _ae:
-            _err_msg = str(_ae) or "Assertion failed"
-            _results.append({{"name": _name, "status": "FAILED", "error": _err_msg}})
-        except _safe_BaseException as _be:
-            _results.append({{"name": _name, "status": "FAILED", "error": f"{{type(_be).__name__}}: {{_be}}"}})
+        if _safe_has_fork:
+            # True OS Process Isolation via fork (Linux Docker sandbox)
+            _r_fd, _w_fd = _safe_os.pipe()
+            _pid = _safe_os.fork()
+            if _pid == 0:
+                # Inside isolated child process
+                _safe_os.close(_r_fd)
+                try:
+                    exec(_case_src, _base_globals)
+                    _safe_os.write(_w_fd, b"OK")
+                    _safe_os._exit(0)
+                except AssertionError as _ae:
+                    _msg = (str(_ae) or "Assertion failed").encode("utf-8", "replace")
+                    _safe_os.write(_w_fd, b"FAIL:" + _msg)
+                    _safe_os._exit(1)
+                except _safe_BaseException as _be:
+                    _msg = f"{{type(_be).__name__}}: {{_be}}".encode("utf-8", "replace")
+                    _safe_os.write(_w_fd, b"ERR:" + _msg)
+                    _safe_os._exit(2)
+            else:
+                # Inside parent harness process
+                _safe_os.close(_w_fd)
+                _, _status = _safe_os.waitpid(_pid, 0)
+                with _safe_os.fdopen(_r_fd, "rb") as _rf:
+                    _pipe_out = _rf.read().decode("utf-8", "replace")
+                
+                _exit_code = _safe_os.WEXITSTATUS(_status) if _safe_os.WIFEXITED(_status) else -1
+                if _exit_code == 0:
+                    _results.append({{"name": _name, "status": "PASSED", "error": ""}})
+                elif _pipe_out.startswith("FAIL:"):
+                    _results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[5:]}})
+                elif _pipe_out.startswith("ERR:"):
+                    _results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[4:]}})
+                else:
+                    _results.append({{
+                        "name": _name,
+                        "status": "FAILED",
+                        "error": f"Process terminated abnormally (exit code {{_exit_code}})",
+                    }})
+        else:
+            # Fallback per-test namespace isolation for non-fork environments (Windows tests)
+            _test_ns = dict(_base_globals)
+            try:
+                exec(_case_src, _test_ns)
+                _results.append({{"name": _name, "status": "PASSED", "error": ""}})
+            except AssertionError as _ae:
+                _results.append({{"name": _name, "status": "FAILED", "error": str(_ae) or "Assertion failed"}})
+            except _safe_BaseException as _be:
+                _results.append({{"name": _name, "status": "FAILED", "error": f"{{type(_be).__name__}}: {{_be}}"}})
 
 _passed = sum(1 for _r in _results if _r["status"] == "PASSED")
 _total = len(_results)
@@ -167,7 +212,9 @@ _output_json = _safe_json_dumps({{
     "passed": _passed,
     "failed": _total - _passed,
     "percentage": _pct,
-    "results": _results
+    "results": _results,
+    "captured_stdout": _captured_stdout,
+    "compilation_error": _compilation_error,
 }})
 
 _safe_sys.stdout.write(f"\\n{{_start_marker}}\\n{{_output_json}}\\n{{_end_marker}}\\n")
@@ -215,6 +262,15 @@ _safe_sys.stdout.write(f"\\n{{_start_marker}}\\n{{_output_json}}\\n{{_end_marker
 
     try:
         metrics = json.loads(match.group(1))
+        # Synthesize a clean execution dictionary from the runner's captured stdout
+        comp_err = metrics.get("compilation_error")
+        exec_dict = {
+            "status": "error" if comp_err else "success",
+            "stdout": metrics.get("captured_stdout", ""),
+            "stderr": comp_err or "",
+            "exit_code": 1 if comp_err else 0,
+            "output_truncated": docker_res.get("output_truncated", False),
+        }
         return {
             "status": "success",
             "total": metrics["total"],
@@ -222,7 +278,8 @@ _safe_sys.stdout.write(f"\\n{{_start_marker}}\\n{{_output_json}}\\n{{_end_marker
             "failed": metrics["failed"],
             "percentage": metrics["percentage"],
             "results": metrics["results"],
-            "execution": docker_res,
+            "captured_stdout": metrics.get("captured_stdout", ""),
+            "execution": exec_dict,
         }
     except Exception as e:
         return {

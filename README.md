@@ -57,7 +57,7 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 * Retrieves learner information from SQLite using safe parameterized domain tools (`get_learner_by_id_tool`, `search_learners_by_track_tool`, `get_track_aggregate_stats_tool`).
 * **Zero Arbitrary SQL Execution:** Raw SQL tool (`learner_sql_tool`) has been removed from the agent registry, eliminating arbitrary SQL injection and browsing risks.
-* **Differential Privacy on Cohort Stats:** `get_track_aggregate_stats()` enforces a minimum cohort size (`MIN_COHORT_SIZE = 3`) to prevent learner re-identification in sparse tracks.
+* **k-Anonymity Privacy on Cohort Stats:** `get_track_aggregate_stats()` enforces a minimum cohort threshold (`MIN_COHORT_SIZE = 3`) to prevent learner re-identification in sparse tracks (distinct from noise-based differential privacy).
 * Recommends `get_learner_by_id()` as the primary parameterized lookup to ensure strict single-learner isolation and prevent cross-learner data exposure.
 * Underlying query helper enforces a 5-row maximum, column allowlisting, read-only mode (`mode=ro`), and blocks SQL comments and system metadata (`sqlite_master`, `pragma`).
 * Uses ChromaDB to retrieve relevant knowledge.
@@ -71,7 +71,7 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 * Accepts Python code, assignment requirements, and optional test assertions (`test_suite`).
 * Runs the **Automated Test Runner** (`src/tools/test_runner.py`) inside the Docker sandbox with strict anti-tampering and isolation:
-  * **Per-Test Namespace Isolation:** Pre-compiles learner code once and executes each assertion in a fresh namespace, preventing state leakage between tests.
+  * **Single Code Execution & True OS Process Isolation:** Learner code is executed once to capture base runtime output; each unit test assertion executes in a dedicated child process (`os.fork()` on Linux with copy-on-write memory and pipe IPC), providing true operating system process isolation between individual tests.
   * **Safe Primitives Pre-Binding:** Pre-binds safe builtins (`_safe_sys`, `_safe_json_dumps`, `_safe_StringIO`, `_safe_BaseException`) to prevent learner code from monkey-patching runner internals.
   * **BaseException & SystemExit Trapping:** Safely catches `BaseException` (specifically `SystemExit`) so student code calling `sys.exit()` cannot terminate the test harness.
   * **Session Delimiters:** Emits metric payloads wrapped in random delimiters to prevent stdout spoofing.
@@ -104,7 +104,8 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 ### 3.4 Human-in-the-Loop
 
 * Uses LangGraph `interrupt()` to pause selected recommendations.
-* Requests human approval or rejection.
+* **Reviewer Authentication & RBAC Governance:** Requires authenticated reviewer identity against authorized institutional roles (`AUTHORIZED_HITL_REVIEWERS`), rejecting unauthorized approval attempts automatically.
+* **Configurable Employer Tiers:** Qualifying placement review triggers are configurable via the `TIER_1_EMPLOYERS` environment variable (default: `fawry,vodafone,instapay`).
 * Resumes execution using LangGraph `Command(resume=...)`.
 * **Dual Checkpointing Architecture:** The core LangGraph workflow in `build_orchestrator()` defaults to `MemorySaver()` for isolated, fast unit tests, while `main.py` initializes a durable `SqliteSaver` (with WAL mode, 5-second busy timeout, and thread isolation) to guarantee restart-safe sessions and durable Human-in-the-Loop review state across restarts.
 
@@ -150,6 +151,12 @@ sprints-ai-orchestrator/
 │   │   ├── code_repl.py
 │   │   ├── document_loader.py
 │   │   └── audio_transcriber.py
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── logger.py            # Structured JSON telemetry and observability
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── logger.py            # Structured JSON telemetry and observability
 │   ├── state.py
 │   ├── llm.py
 │   └── main.py                  # Interactive CLI and multi-stage demonstration
@@ -264,11 +271,12 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **57 passing tests** (100% pass rate) covering:
-* **Agent Workflows & Assessment (13 tests):** Agentic RAG retries/stopping, evaluator-optimizer bounds, routing, Human-in-the-Loop interrupt/resume cycles, assessor unit test grading, execution failure handling, runner crash fail-closed abortion, and deterministic assertion failure score capping.
-* **Database Privacy & Domain Operations (14 tests):** Safe parameterized single-learner lookups, track searches, aggregate metrics with differential privacy (`MIN_COHORT_SIZE = 3`), row bounding (5 max), column allowlisting, SQL comment and system table blocking, verified with an isolated synthetic database fixture.
-* **Automated Test Runner & Anti-Tampering (12 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, namespace isolation, and fake metrics delimiter protection.
-* **Persistent SQLite Checkpointing (4 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, and durable Human-in-the-Loop resumption across simulated process restart.
+The comprehensive test suite currently consists of **63 automated tests** (100% pass rate) covering:
+* **Agent Workflows & Governance (15 tests):** Agentic RAG retries/stopping, evaluator-optimizer iteration limits, routing, Human-in-the-Loop interrupt/resume cycles, reviewer authentication RBAC enforcement, assessor single-pass grading, fail-closed runner crash abortion, and live Gemini API integration.
+* **Database Privacy & Parameterized Operations (15 tests):** Parameterized single-learner lookups, track searches, row bounds, column allowlisting, SQL injection defense across all domain functions, and k-anonymity cohort privacy (`MIN_COHORT_SIZE = 3`), verified with an isolated synthetic database fixture.
+* **Automated Test Runner & Anti-Tampering (12 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), and fake metrics delimiter protection.
+* **Persistent SQLite Checkpointing (5 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, and true cross-process persistence spanning separate OS Python processes.
+* **Structured Logging & Observability (2 tests):** Structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 * **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.
