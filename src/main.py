@@ -12,8 +12,11 @@ if str(REPO_ROOT) not in sys.path:
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
-from src.agents.orchestrator import orchestrator
+from src.agents.orchestrator import build_orchestrator
+from src.tools.sqlite_checkpoint import SqliteSaver
 from src.tools.test_runner import run_automated_tests
+
+orchestrator = build_orchestrator(checkpointer=SqliteSaver())
 
 
 BANNER = """

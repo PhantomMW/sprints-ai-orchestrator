@@ -27,51 +27,52 @@ class SqliteSaver(InMemorySaver):
         self._load_from_db()
 
     def _init_db(self) -> None:
-        with self._lock, sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS checkpoints (
-                    thread_id TEXT,
-                    checkpoint_ns TEXT,
-                    checkpoint_id TEXT,
-                    checkpoint_tuple BLOB,
-                    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS blobs (
-                    thread_id TEXT,
-                    checkpoint_ns TEXT,
-                    channel TEXT,
-                    version TEXT,
-                    blob_data BLOB,
-                    PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS writes (
-                    thread_id TEXT,
-                    checkpoint_ns TEXT,
-                    checkpoint_id TEXT,
-                    task_id TEXT,
-                    idx INTEGER,
-                    write_tuple BLOB,
-                    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
-                )
-            """)
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path))
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS checkpoints (
+                        thread_id TEXT,
+                        checkpoint_ns TEXT,
+                        checkpoint_id TEXT,
+                        checkpoint_tuple BLOB,
+                        PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS blobs (
+                        blob_key BLOB PRIMARY KEY,
+                        blob_data BLOB
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS writes (
+                        write_key BLOB PRIMARY KEY,
+                        write_tuple BLOB
+                    )
+                """)
+                conn.commit()
+            finally:
+                conn.close()
 
     def _load_from_db(self) -> None:
-        with self._lock, sqlite3.connect(self.db_path) as conn:
-            for row in conn.execute("SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple FROM checkpoints"):
-                t_id, ns, cp_id, cp_data = row
-                self.storage[t_id][ns][cp_id] = pickle.loads(cp_data)
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path))
+            try:
+                for row in conn.execute("SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple FROM checkpoints"):
+                    t_id, ns, cp_id, cp_data = row
+                    self.storage[t_id][ns][cp_id] = pickle.loads(cp_data)
 
-            for row in conn.execute("SELECT thread_id, checkpoint_ns, channel, version, blob_data FROM blobs"):
-                t_id, ns, chan, ver, b_data = row
-                self.blobs[(t_id, ns, chan, ver)] = pickle.loads(b_data)
+                for row in conn.execute("SELECT blob_key, blob_data FROM blobs"):
+                    b_key, b_data = row
+                    self.blobs[pickle.loads(b_key)] = pickle.loads(b_data)
 
-            for row in conn.execute("SELECT thread_id, checkpoint_ns, checkpoint_id, task_id, idx, write_tuple FROM writes"):
-                t_id, ns, cp_id, task_id, idx, w_data = row
-                self.writes[(t_id, ns, cp_id)][(task_id, idx)] = pickle.loads(w_data)
+                for row in conn.execute("SELECT write_key, write_tuple FROM writes"):
+                    w_key, w_data = row
+                    outer_key, inner_key = pickle.loads(w_key)
+                    self.writes[outer_key][inner_key] = pickle.loads(w_data)
+            finally:
+                conn.close()
 
     def put(
         self,
@@ -85,20 +86,25 @@ class SqliteSaver(InMemorySaver):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         cp_id = checkpoint["id"]
 
-        with self._lock, sqlite3.connect(self.db_path) as conn:
-            if cp_id in self.storage[thread_id][checkpoint_ns]:
-                data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
-                conn.execute(
-                    "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?)",
-                    (thread_id, checkpoint_ns, cp_id, data)
-                )
-            for k, v in new_versions.items():
-                blob_key = (thread_id, checkpoint_ns, k, v)
-                if blob_key in self.blobs:
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path))
+            try:
+                if cp_id in self.storage[thread_id][checkpoint_ns]:
+                    data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
                     conn.execute(
-                        "INSERT OR REPLACE INTO blobs VALUES (?, ?, ?, ?, ?)",
-                        (thread_id, checkpoint_ns, k, str(v), pickle.dumps(self.blobs[blob_key]))
+                        "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?)",
+                        (thread_id, checkpoint_ns, cp_id, data)
                     )
+                for k, v in new_versions.items():
+                    blob_key = (thread_id, checkpoint_ns, k, v)
+                    if blob_key in self.blobs:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO blobs VALUES (?, ?)",
+                            (pickle.dumps(blob_key), pickle.dumps(self.blobs[blob_key]))
+                        )
+                conn.commit()
+            finally:
+                conn.close()
         return res
 
     def put_writes(
@@ -114,10 +120,16 @@ class SqliteSaver(InMemorySaver):
         checkpoint_id = config["configurable"]["checkpoint_id"]
         outer_key = (thread_id, checkpoint_ns, checkpoint_id)
 
-        with self._lock, sqlite3.connect(self.db_path) as conn:
-            if outer_key in self.writes:
-                for (t_id, idx), write_tuple in self.writes[outer_key].items():
-                    conn.execute(
-                        "INSERT OR REPLACE INTO writes VALUES (?, ?, ?, ?, ?, ?)",
-                        (thread_id, checkpoint_ns, checkpoint_id, t_id, idx, pickle.dumps(write_tuple))
-                    )
+        with self._lock:
+            conn = sqlite3.connect(str(self.db_path))
+            try:
+                if outer_key in self.writes:
+                    for inner_key, write_tuple in self.writes[outer_key].items():
+                        full_key = (outer_key, inner_key)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO writes VALUES (?, ?)",
+                            (pickle.dumps(full_key), pickle.dumps(write_tuple))
+                        )
+                conn.commit()
+            finally:
+                conn.close()

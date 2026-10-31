@@ -503,7 +503,7 @@ def build_orchestrator(checkpointer=None):
     workflow.add_edge("placement_review", END)
     workflow.add_edge("error", END)
 
-    saver = checkpointer if checkpointer is not None else SqliteSaver()
+    saver = checkpointer if checkpointer is not None else MemorySaver()
 
     return workflow.compile(checkpointer=saver)
 
