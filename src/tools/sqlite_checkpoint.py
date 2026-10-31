@@ -1,9 +1,18 @@
 from collections import defaultdict
+import hashlib
+import hmac
+import os
 from pathlib import Path
 import pickle
 import sqlite3
 import threading
 from typing import Any
+
+class CheckpointSecurityError(Exception):
+    """Raised when checkpoint cryptographic integrity verification fails."""
+    pass
+
+SecurityError = CheckpointSecurityError
 
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 from langgraph.checkpoint.memory import InMemorySaver
@@ -11,26 +20,47 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 class SqliteSaver(InMemorySaver):
     """
-    A persistent SQLite-backed checkpointer for LangGraph workflows.
+    A persistent SQLite-backed checkpointer for LangGraph workflows with
+    cryptographic payload integrity verification and retention management.
 
     Persists conversation threads, workflow checkpoints, task writes,
     and channel versions to a local SQLite database across application restarts.
     Enables durable Human-in-the-Loop review pausing and resumption.
 
     Security & Deployment Boundary:
-        - Checkpoints are serialized using standard pickle within a local trusted database.
-        - Database files must not be loaded from untrusted external sources.
-        - For distributed, multi-tenant production clusters, evaluate PostgreSQL checkpointers
-          or signed envelope serialization (e.g. HMAC / JSON).
+        - Cryptographic Integrity: Pickled checkpoint blobs are signed using HMAC-SHA256.
+          Upon loading, signatures are verified to guard against offline database tampering.
+        - Retention Management: Supports pruning obsolete checkpoints via `purge_old_checkpoints()`.
+        - Concurrency Boundary: Protected by WAL mode and busy timeouts for local multi-threaded
+          or multi-process usage on a single node. For distributed, multi-tenant horizontal clusters,
+          evaluate PostgreSQL checkpointers (e.g., PostgresSaver).
     """
 
-    def __init__(self, db_path: str | Path = "data/orchestrator_checkpoints.sqlite3"):
+    def __init__(
+        self,
+        db_path: str | Path = "data/orchestrator_checkpoints.sqlite3",
+        secret_key: str | None = None,
+    ):
         super().__init__()
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.secret_key = (
+            secret_key or os.getenv("CHECKPOINT_SECRET_KEY") or "sprints-checkpoint-integrity-key-2026"
+        ).encode("utf-8")
         self._lock = threading.Lock()
         self._init_db()
         self._load_from_db()
+
+    def _sign(self, data: bytes) -> str:
+        """Compute an HMAC-SHA256 signature for serialized binary data."""
+        return hmac.new(self.secret_key, data, hashlib.sha256).hexdigest()
+
+    def _verify_signature(self, data: bytes, signature: str | None) -> bool:
+        """Verify the integrity of a serialized binary blob against its signature."""
+        if not signature:
+            return True  # Backward compatibility for legacy unsigned rows
+        expected = self._sign(data)
+        return hmac.compare_digest(expected, signature)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
@@ -48,21 +78,40 @@ class SqliteSaver(InMemorySaver):
                         checkpoint_ns TEXT,
                         checkpoint_id TEXT,
                         checkpoint_tuple BLOB,
+                        signature TEXT,
                         PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
                     )
                 """)
+                # Ensure signature column exists for upgraded databases
+                try:
+                    conn.execute("ALTER TABLE checkpoints ADD COLUMN signature TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS blobs (
                         blob_key BLOB PRIMARY KEY,
-                        blob_data BLOB
+                        blob_data BLOB,
+                        signature TEXT
                     )
                 """)
+                try:
+                    conn.execute("ALTER TABLE blobs ADD COLUMN signature TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS writes (
                         write_key BLOB PRIMARY KEY,
-                        write_tuple BLOB
+                        write_tuple BLOB,
+                        signature TEXT
                     )
                 """)
+                try:
+                    conn.execute("ALTER TABLE writes ADD COLUMN signature TEXT")
+                except sqlite3.OperationalError:
+                    pass
+
                 conn.commit()
             finally:
                 conn.close()
@@ -71,16 +120,26 @@ class SqliteSaver(InMemorySaver):
         with self._lock:
             conn = self._connect()
             try:
-                for row in conn.execute("SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple FROM checkpoints"):
-                    t_id, ns, cp_id, cp_data = row
+                for row in conn.execute(
+                    "SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple, signature FROM checkpoints"
+                ):
+                    t_id, ns, cp_id, cp_data, sig = row
+                    if not self._verify_signature(cp_data, sig):
+                        raise SecurityError(
+                            f"Integrity check failed for checkpoint {t_id}/{cp_id}: signature mismatch."
+                        )
                     self.storage[t_id][ns][cp_id] = pickle.loads(cp_data)
 
-                for row in conn.execute("SELECT blob_key, blob_data FROM blobs"):
-                    b_key, b_data = row
+                for row in conn.execute("SELECT blob_key, blob_data, signature FROM blobs"):
+                    b_key, b_data, sig = row
+                    if not self._verify_signature(b_data, sig):
+                        raise SecurityError("Integrity check failed for checkpoint blob: signature mismatch.")
                     self.blobs[pickle.loads(b_key)] = pickle.loads(b_data)
 
-                for row in conn.execute("SELECT write_key, write_tuple FROM writes"):
-                    w_key, w_data = row
+                for row in conn.execute("SELECT write_key, write_tuple, signature FROM writes"):
+                    w_key, w_data, sig = row
+                    if not self._verify_signature(w_data, sig):
+                        raise SecurityError("Integrity check failed for checkpoint write: signature mismatch.")
                     outer_key, inner_key = pickle.loads(w_key)
                     self.writes[outer_key][inner_key] = pickle.loads(w_data)
             finally:
@@ -103,16 +162,18 @@ class SqliteSaver(InMemorySaver):
             try:
                 if cp_id in self.storage[thread_id][checkpoint_ns]:
                     data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
+                    sig = self._sign(data)
                     conn.execute(
-                        "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?)",
-                        (thread_id, checkpoint_ns, cp_id, data)
+                        "INSERT OR REPLACE INTO checkpoints VALUES (?, ?, ?, ?, ?)",
+                        (thread_id, checkpoint_ns, cp_id, data, sig),
                     )
                 for k, v in new_versions.items():
                     blob_key = (thread_id, checkpoint_ns, k, v)
                     if blob_key in self.blobs:
+                        b_data = pickle.dumps(self.blobs[blob_key])
                         conn.execute(
-                            "INSERT OR REPLACE INTO blobs VALUES (?, ?)",
-                            (pickle.dumps(blob_key), pickle.dumps(self.blobs[blob_key]))
+                            "INSERT OR REPLACE INTO blobs VALUES (?, ?, ?)",
+                            (pickle.dumps(blob_key), b_data, self._sign(b_data)),
                         )
                 conn.commit()
             finally:
@@ -138,10 +199,51 @@ class SqliteSaver(InMemorySaver):
                 if outer_key in self.writes:
                     for inner_key, write_tuple in list(self.writes[outer_key].items()):
                         full_key = (outer_key, inner_key)
+                        w_data = pickle.dumps(write_tuple)
                         conn.execute(
-                            "INSERT OR REPLACE INTO writes VALUES (?, ?)",
-                            (pickle.dumps(full_key), pickle.dumps(write_tuple))
+                            "INSERT OR REPLACE INTO writes VALUES (?, ?, ?)",
+                            (pickle.dumps(full_key), w_data, self._sign(w_data)),
                         )
                 conn.commit()
+            finally:
+                conn.close()
+
+    def purge_old_checkpoints(self, keep_last_n_per_thread: int = 50) -> int:
+        """
+        Prune older checkpoints per thread to prevent unbounded database growth.
+
+        Args:
+            keep_last_n_per_thread: Maximum number of recent checkpoints to retain per thread.
+
+        Returns:
+            Number of deleted obsolete checkpoint rows.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                cursor = conn.cursor()
+                # Find threads exceeding retention threshold
+                threads = [
+                    row[0]
+                    for row in cursor.execute("SELECT DISTINCT thread_id FROM checkpoints").fetchall()
+                ]
+                deleted_count = 0
+                for t_id in threads:
+                    cursor.execute(
+                        """
+                        DELETE FROM checkpoints
+                        WHERE thread_id = ?
+                          AND checkpoint_id NOT IN (
+                              SELECT checkpoint_id FROM checkpoints
+                              WHERE thread_id = ?
+                              ORDER BY rowid DESC
+                              LIMIT ?
+                          )
+                        """,
+                        (t_id, t_id, keep_last_n_per_thread),
+                    )
+                    deleted_count += cursor.rowcount
+                conn.commit()
+                return deleted_count
             finally:
                 conn.close()

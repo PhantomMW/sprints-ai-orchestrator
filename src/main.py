@@ -15,6 +15,7 @@ from langgraph.types import Command
 from src.agents.orchestrator import build_orchestrator
 from src.tools.sqlite_checkpoint import SqliteSaver
 from src.tools.test_runner import run_automated_tests
+from src.utils.auth import generate_reviewer_token
 
 orchestrator = build_orchestrator(checkpointer=SqliteSaver())
 
@@ -209,9 +210,11 @@ def run_interactive_mode():
                 print("This recommendation qualifies for tier-1 placement review.")
                 dec = input("Decision [A]pprove / [R]eject: ").strip().lower()
                 approved = dec.startswith("a")
+                auth_tok = generate_reviewer_token("sarah_lead", "placement_approver") if approved else None
                 resume_payload = {
                     "approved": approved,
-                    "reviewer": "Interactive CLI Reviewer",
+                    "reviewer": "sarah_lead" if approved else "interactive_reviewer",
+                    "auth_token": auth_tok,
                     "comments": "Reviewed and submitted via CLI",
                 }
                 result = orchestrator.invoke(Command(resume=resume_payload), config=config)

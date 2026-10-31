@@ -11,21 +11,17 @@ from src.agents.assessor_agent import assess_python_code
 from src.agents.evaluator_optimizer import evaluate_and_optimize
 from src.state import AgentState
 from src.tools.sqlite_checkpoint import SqliteSaver
-
+from src.utils.auth import (
+    generate_reviewer_token,
+    get_authorized_reviewers,
+    verify_reviewer_auth,
+)
 
 import os
 
 MAX_OPTIMIZATION_ITERATIONS = 3
 
 DEFAULT_TIER_1_EMPLOYERS = {"fawry", "vodafone", "instapay"}
-
-AUTHORIZED_HITL_REVIEWERS = {
-    "career_admin",
-    "placement_lead",
-    "institutional_reviewer",
-    "Director of Placement",
-    "Test Reviewer",
-}
 
 
 def get_tier_1_employers() -> set[str]:
@@ -34,14 +30,6 @@ def get_tier_1_employers() -> set[str]:
     if env_tiers.strip():
         return {e.strip().casefold() for e in env_tiers.split(",") if e.strip()}
     return {e.casefold() for e in DEFAULT_TIER_1_EMPLOYERS}
-
-
-def get_authorized_reviewers() -> set[str]:
-    """Retrieve authorized reviewer identifiers for HITL governance."""
-    env_reviewers = os.environ.get("AUTHORIZED_HITL_REVIEWERS", "")
-    if env_reviewers.strip():
-        return {r.strip().casefold() for r in env_reviewers.split(",") if r.strip()}
-    return {r.casefold() for r in AUTHORIZED_HITL_REVIEWERS}
 
 
 def router_node(state: AgentState) -> dict:
@@ -428,20 +416,20 @@ def placement_review_node(state: AgentState) -> dict:
     reviewer = decision.get("reviewer", "") if isinstance(decision, dict) else ""
     comments = decision.get("comments", "") if isinstance(decision, dict) else ""
 
-    # Reviewer Authentication & RBAC Governance check
-    authorized_set = get_authorized_reviewers()
-    reviewer_clean = str(reviewer).strip()
-    is_authenticated = bool(reviewer_clean and reviewer_clean.casefold() in authorized_set)
+    # Cryptographic Reviewer Authentication & RBAC Governance check
+    thread_id = state.get("thread_id", "")
+    is_authenticated, auth_reason, audit_record = verify_reviewer_auth(
+        decision if isinstance(decision, dict) else {}, thread_id=thread_id
+    )
 
     if approved and not is_authenticated:
         approved = False
         decision_label = "REJECTED (UNAUTHORIZED REVIEWER)"
-        comments = (
-            f"Governance Alert: Approval rejected. Reviewer '{reviewer}' is not authorized. "
-            f"Authorized roles: {sorted(authorized_set)}."
-        )
+        comments = f"Governance Alert: Approval rejected. {auth_reason}"
     else:
         decision_label = "APPROVED" if approved else "REJECTED"
+        if is_authenticated and audit_record.get("reviewer_id"):
+            reviewer = audit_record["reviewer_id"]
 
     response = state.get("final_response", "")
     response += (
@@ -465,7 +453,7 @@ def placement_review_node(state: AgentState) -> dict:
         emp_list = [str(e).strip() for e in preferred if str(e).strip()]
     else:
         emp_list = []
-    
+
     tier_1_matched = [e for e in emp_list if e.casefold() in get_tier_1_employers()]
     employer_label = tier_1_matched[0] if tier_1_matched else "Configured Tier-1 Employer"
 
@@ -476,6 +464,8 @@ def placement_review_node(state: AgentState) -> dict:
             "approved": approved,
             "reviewer": reviewer,
             "reviewer_authenticated": is_authenticated,
+            "auth_reason": auth_reason,
+            "audit_record": audit_record,
             "comments": comments,
             "student_id": review_request["student_id"],
             "employer_review": employer_label,

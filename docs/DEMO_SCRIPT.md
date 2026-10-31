@@ -2,7 +2,7 @@
 ## Sprints Multi-Agent AI Career & Assessment Orchestrator
 
 **Target duration:** 3 to 5 minutes  
-**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 63 passing tests and GitHub Actions CI.
+**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 73 automated tests (72 passed in CI, 1 skipped) and GitHub Actions CI.
 
 ---
 
@@ -48,7 +48,7 @@ Once the profile is loaded, the Career Advisor initiates an **Agentic RAG loop**
 
 To ensure evaluation integrity and runtime safety, we implemented a two-tier assessment pipeline:
 
-1. **Automated Test Runner with Anti-Tampering Protection:**  
+1. **Automated Test Runner with Multi-Layer Process Isolation & Tampering Resistance:**  
    Rather than relying purely on LLM subjective grading, submissions undergo deterministic unit testing with True OS Process Isolation and single-pass execution:
    - Pre-compiles and executes learner code exactly once, capturing stdout/stderr without redundant re-runs.
    - Executes each unit assertion in a dedicated child process (`os.fork()` on Linux with copy-on-write memory and pipe IPC), providing true operating system process isolation.
@@ -104,17 +104,21 @@ This guarantees that AI never commits placement promises autonomously without in
 
 ---
 
-## 3:45–4:15 | Automated Verification Suite & CI / CD (47/47 Tests Passing)
+## 3:45–4:15 | Automated Verification Suite & CI / CD (73 Tests: 72 Passed, 1 Skipped in CI)
 
-"To prove engineering reliability, the repository features an automated test suite with **47 comprehensive tests** across 8 test suites:
-- `test_db_queries.py`: 14 tests verifying row bounds, projection filters, parameterization, and SQL injection resistance.
+"To prove engineering reliability, the repository features an automated test suite with **73 comprehensive tests** across 10 test suites:
+- `test_db_queries.py`: 17 tests verifying row bounds, projection filters, parameterization, caller role authorization, suppression count masking, and SQL injection resistance.
 - `test_docker_executor.py`: 14 tests validating 64 KiB truncation, timeout enforcement, non-root user, read-only storage, and process failure recovery.
-- `test_test_runner.py`: 6 tests asserting deterministic test runner execution, compilation error trapping, and anti-tampering tokens.
-- `test_sqlite_checkpoint.py`: 2 tests ensuring cross-instance state persistence and thread recovery.
-- `test_assessor_agent.py`: 2 tests verifying scoring guardrails against failing unit tests.
-- `test_orchestrator_evaluator.py`, `test_agentic_rag.py`, `test_evaluator_optimizer.py`: 9 tests verifying end-to-end graph routing, loop caps, and HITL interrupts.
+- `test_test_runner.py`: 16 tests asserting deterministic test runner execution, compilation error trapping, OS process isolation (`os.fork()`), delimiter protection, and 4 adversarial tampering defenses.
+- `test_sqlite_checkpoint.py`: 7 tests ensuring cross-instance state persistence, thread isolation, WAL concurrency, cross-process durability, HMAC tamper detection, and retention pruning.
+- `test_orchestrator_evaluator.py`: 8 tests verifying end-to-end graph routing, loop caps, HITL interrupts, cryptographic HMAC reviewer authentication, signature verification, and anti-replay defense.
+- `test_assessor_agent.py`: 4 tests verifying fail-closed error handling and scoring guardrails against failing unit tests.
+- `test_agentic_rag.py`: 3 tests verifying self-reflective query reformulation and retrieval bounds.
+- `test_evaluator_optimizer.py`: 3 tests verifying optimization loop bounds and quality metrics.
+- `test_logger.py`: 2 tests verifying structured JSON logging and telemetry.
+- `test_live_gemini_integration.py`: 1 test verifying live Gemini API connectivity.
 
-All 47 tests run on every commit via **GitHub Actions CI (`.github/workflows/tests.yml`)**, maintaining a 100% green passing status."
+All runnable tests run on every commit via **GitHub Actions CI (`.github/workflows/tests.yml`)**, maintaining a 100% green passing status."
 
 **Live Action:** Run `pytest -v` or display the GitHub Actions green checkmark badge.
 
@@ -136,7 +140,7 @@ Before presenting, ensure:
 - [ ] Virtual environment active: `.\.venv\Scripts\activate`
 - [ ] Docker Desktop running with Linux engine: `docker info`
 - [ ] Sandbox image built: `docker images sprints-python-sandbox:latest`
-- [ ] Run full test suite: `pytest -v` (verify 63 passed)
+- [ ] Run full test suite: `pytest -v` (verify 73 tests collected: 52 passed locally, 21 skipped for Docker/Live API)
 - [ ] Run automated demo: `python src/main.py --mode demo`
 - [ ] Run interactive mode (optional): `python src/main.py --mode interactive`
 - [ ] Verify `SYN-DEMO-01` synthetic profile is loaded with zero personal data leakage.

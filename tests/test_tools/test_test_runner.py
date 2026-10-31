@@ -185,3 +185,85 @@ print('__TEST_METRICS_END__')
     assert res["status"] == "success"
     assert res["failed"] == 1
     assert res["passed"] == 0
+
+
+@requires_docker
+def test_adversarial_attempt_monkeypatch_os_fork():
+    """Verify that student code attempting to patch os.fork does not compromise the runner."""
+    code = """
+import os
+try:
+    os.fork = lambda: -1
+    os.waitpid = lambda *a: (-1, 0)
+except Exception:
+    pass
+
+def add(a, b):
+    return a + b
+"""
+    suite = "assert add(10, 20) == 30"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["total"] == 1
+    assert res["passed"] == 1
+    assert res["failed"] == 0
+
+
+@requires_docker
+def test_adversarial_attempt_os_exit_in_child():
+    """Verify that student assertion calling os._exit(0) is trapped as an abnormal exit."""
+    code = """
+def divide(a, b):
+    return a / b
+"""
+    suite = """
+import os
+os._exit(0)
+"""
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["failed"] == 1
+    assert res["passed"] == 0
+    assert "Abnormal process exit" in res["results"][0]["error"] or "exit" in res["results"][0]["error"].lower()
+
+
+@requires_docker
+def test_adversarial_attempt_corrupt_builtins():
+    """Verify that student code attempting to corrupt builtins does not prevent grading."""
+    code = """
+try:
+    __builtins__["len"] = None
+    __builtins__["print"] = None
+except Exception:
+    pass
+
+def square(n):
+    return n * n
+"""
+    suite = "assert square(5) == 25"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["passed"] == 1
+    assert res["failed"] == 0
+
+
+@requires_docker
+def test_adversarial_attempt_frame_inspection():
+    """Verify that attempts to clear parent frame globals fail gracefully without harness compromise."""
+    code = """
+import sys
+try:
+    frame = sys._getframe(1)
+    frame.f_globals.clear()
+except Exception:
+    pass
+
+def cube(x):
+    return x ** 3
+"""
+    suite = "assert cube(3) == 27"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["passed"] == 1
+    assert res["failed"] == 0
+

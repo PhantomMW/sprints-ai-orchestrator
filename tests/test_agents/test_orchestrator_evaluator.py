@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from src.agents.orchestrator import build_orchestrator, orchestrator
+from src.utils.auth import generate_reviewer_token
 
 
 def _successful_evaluator_result(response: str) -> dict:
@@ -209,11 +210,13 @@ def test_hitl_pauses_and_resumes_when_reviewer_approves():
         assert interrupt_payload["student_id"] == "SPR-1001"
         assert interrupt_payload["active_vacancy_verified"] is False
 
+        token = generate_reviewer_token("sarah_lead", "placement_approver")
         resumed_result = orchestrator.invoke(
             Command(
                 resume={
                     "approved": True,
-                    "reviewer": "Test Reviewer",
+                    "reviewer": "sarah_lead",
+                    "auth_token": token,
                     "comments": "Recommendation reviewed.",
                 }
             ),
@@ -223,7 +226,9 @@ def test_hitl_pauses_and_resumes_when_reviewer_approves():
     assert resumed_result["human_approval_required"] is True
     assert resumed_result["human_approval"] is True
     assert resumed_result["approval_details"]["approved"] is True
-    assert resumed_result["approval_details"]["reviewer"] == "Test Reviewer"
+    assert resumed_result["approval_details"]["reviewer"] == "sarah_lead"
+    assert resumed_result["approval_details"]["reviewer_authenticated"] is True
+    assert resumed_result["approval_details"]["audit_record"]["signature_verified"] is True
     assert "APPROVED" in resumed_result["final_response"]
     assert "no active vacancy" in resumed_result["final_response"]
 
@@ -319,3 +324,76 @@ def test_hitl_rejects_unauthorized_reviewer():
     assert resumed_result["approval_details"]["approved"] is False
     assert resumed_result["approval_details"]["reviewer_authenticated"] is False
     assert "REJECTED (UNAUTHORIZED REVIEWER)" in resumed_result["final_response"]
+
+
+def test_hitl_rejects_tampered_token_signature():
+    """Verify that an approval with a forged or tampered HMAC signature is rejected."""
+    orchestrator = build_orchestrator()
+    config = {"configurable": {"thread_id": "test-tampered-token"}}
+
+    with (
+        patch(
+            "src.agents.orchestrator.generate_career_advice",
+            return_value=_eligible_advisor_result(),
+        ),
+        patch(
+            "src.agents.orchestrator.evaluate_and_optimize",
+            return_value=_successful_evaluator_result("Career recommendation."),
+        ),
+    ):
+        orchestrator.invoke(
+            {
+                "student_id": "SPR-1001",
+                "request_type": "advisor",
+                "messages": [HumanMessage(content="Check placement.")],
+            },
+            config,
+        )
+
+        valid_token = generate_reviewer_token("sarah_lead", "placement_approver")
+        b64_part, _ = valid_token.split(".")
+        forged_token = f"{b64_part}.0123456789abcdef0123456789abcdef"
+
+        resumed_result = orchestrator.invoke(
+            Command(
+                resume={
+                    "approved": True,
+                    "reviewer": "sarah_lead",
+                    "auth_token": forged_token,
+                    "comments": "Attempt with forged signature.",
+                }
+            ),
+            config,
+        )
+
+    assert resumed_result["human_approval"] is False
+    assert resumed_result["approval_details"]["approved"] is False
+    assert resumed_result["approval_details"]["reviewer_authenticated"] is False
+    assert "tampered" in resumed_result["approval_details"]["auth_reason"].lower()
+
+
+def test_hitl_rejects_replay_attack():
+    """Verify that replaying the exact same token nonce is detected and rejected."""
+    orchestrator = build_orchestrator()
+    token = generate_reviewer_token("sarah_lead", "placement_approver")
+
+    # First use: valid
+    config1 = {"configurable": {"thread_id": "test-replay-1"}}
+    with (
+        patch("src.agents.orchestrator.generate_career_advice", return_value=_eligible_advisor_result()),
+        patch("src.agents.orchestrator.evaluate_and_optimize", return_value=_successful_evaluator_result("Rec.")),
+    ):
+        orchestrator.invoke({"student_id": "SPR-1001", "request_type": "advisor", "messages": [HumanMessage(content="A")]}, config1)
+        res1 = orchestrator.invoke(Command(resume={"approved": True, "auth_token": token}), config1)
+    assert res1["human_approval"] is True
+
+    # Second use with identical token (replay attempt)
+    config2 = {"configurable": {"thread_id": "test-replay-2"}}
+    with (
+        patch("src.agents.orchestrator.generate_career_advice", return_value=_eligible_advisor_result()),
+        patch("src.agents.orchestrator.evaluate_and_optimize", return_value=_successful_evaluator_result("Rec.")),
+    ):
+        orchestrator.invoke({"student_id": "SPR-1001", "request_type": "advisor", "messages": [HumanMessage(content="B")]}, config2)
+        res2 = orchestrator.invoke(Command(resume={"approved": True, "auth_token": token}), config2)
+    assert res2["human_approval"] is False
+    assert "replay" in res2["approval_details"]["auth_reason"].lower()

@@ -8,6 +8,7 @@ from langgraph.types import Command
 
 from src.agents.orchestrator import build_orchestrator
 from src.tools.sqlite_checkpoint import SqliteSaver
+from src.utils.auth import generate_reviewer_token
 
 
 def test_sqlite_saver_persists_state_across_instances(tmp_path):
@@ -173,10 +174,12 @@ def test_sqlite_saver_hitl_resumption_across_process_restart(tmp_path):
     assert "placement_review" in state_after_restart.next
 
     # Step 4: Resume workflow in the new process
+    token = generate_reviewer_token("Director of Placement", "placement_approver")
     resume_command = Command(
         resume={
             "approved": True,
             "reviewer": "Director of Placement",
+            "auth_token": token,
             "comments": "Approved after system restart verification.",
         }
     )
@@ -245,3 +248,48 @@ sys.exit(0)
 
     p2 = subprocess.run([sys.executable, "-c", script_proc2], capture_output=True, text=True)
     assert p2.returncode == 0, f"Process 2 failed:\nSTDOUT: {p2.stdout}\nSTDERR: {p2.stderr}"
+
+
+def test_sqlite_saver_hmac_detects_disk_tampering(tmp_path):
+    """Verify that out-of-band tampering with the SQLite checkpoint BLOB is rejected."""
+    db_file = tmp_path / "tamper_test.sqlite3"
+    saver = SqliteSaver(db_file)
+    builder = StateGraph(dict)
+    builder.add_node("init", lambda s: {"key": "original_unmodified"})
+    builder.set_entry_point("init")
+    builder.set_finish_point("init")
+    graph = builder.compile(checkpointer=saver)
+
+    cfg = {"configurable": {"thread_id": "thread-tamper-check"}}
+    graph.invoke({"key": "original"}, config=cfg)
+
+    # Tamper with the raw BLOB data in SQLite directly behind the saver's back
+    import sqlite3
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("UPDATE checkpoints SET checkpoint_tuple = X'1234567890'")
+        conn.commit()
+
+    # Attempting to load tampered database must raise SecurityError
+    with pytest.raises(Exception) as excinfo:
+        SqliteSaver(db_file)
+    assert "Integrity check failed" in str(excinfo.value) or "signature mismatch" in str(excinfo.value)
+
+
+def test_sqlite_saver_retention_purge(tmp_path):
+    """Verify retention management cleans up obsolete checkpoints."""
+    db_file = tmp_path / "retention_test.sqlite3"
+    saver = SqliteSaver(db_file)
+    builder = StateGraph(dict)
+    builder.add_node("step", lambda s: {"step": s.get("step", 0) + 1})
+    builder.set_entry_point("step")
+    builder.set_finish_point("step")
+    graph = builder.compile(checkpointer=saver)
+
+    cfg = {"configurable": {"thread_id": "thread-retention"}}
+    # Write 5 checkpoints
+    for _ in range(5):
+        graph.invoke({"step": 0}, config=cfg)
+
+    # Purge older checkpoints, keeping only the 2 most recent
+    deleted = saver.purge_old_checkpoints(keep_last_n_per_thread=2)
+    assert deleted >= 1

@@ -153,9 +153,7 @@ sprints-ai-orchestrator/
 │   │   └── audio_transcriber.py
 │   ├── utils/
 │   │   ├── __init__.py
-│   │   └── logger.py            # Structured JSON telemetry and observability
-│   ├── utils/
-│   │   ├── __init__.py
+│   │   ├── auth.py              # Cryptographic HMAC session tokens & RBAC governance
 │   │   └── logger.py            # Structured JSON telemetry and observability
 │   ├── state.py
 │   ├── llm.py
@@ -271,11 +269,11 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **63 automated tests** (100% pass rate) covering:
-* **Agent Workflows & Governance (15 tests):** Agentic RAG retries/stopping, evaluator-optimizer iteration limits, routing, Human-in-the-Loop interrupt/resume cycles, reviewer authentication RBAC enforcement, assessor single-pass grading, fail-closed runner crash abortion, and live Gemini API integration.
-* **Database Privacy & Parameterized Operations (15 tests):** Parameterized single-learner lookups, track searches, row bounds, column allowlisting, SQL injection defense across all domain functions, and k-anonymity cohort privacy (`MIN_COHORT_SIZE = 3`), verified with an isolated synthetic database fixture.
-* **Automated Test Runner & Anti-Tampering (12 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), and fake metrics delimiter protection.
-* **Persistent SQLite Checkpointing (5 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, and true cross-process persistence spanning separate OS Python processes.
+The comprehensive test suite currently consists of **73 automated tests (72 passed in CI, 1 skipped when live Gemini API key is absent)** with a 100% pass rate among runnable tests, covering:
+* **Agent Workflows & Governance (17 tests):** Agentic RAG retries/stopping, evaluator-optimizer iteration limits, routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC session token verification, token signature tampering rejection, replay attack defense, assessor single-pass grading, fail-closed runner crash abortion, and live Gemini API integration.
+* **Database Privacy & Parameterized Operations (17 tests):** Parameterized single-learner lookups, track searches, row bounds, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), and k-anonymity cohort privacy (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage in error messages.
+* **Automated Test Runner & Adversarial Hardening (16 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), delimiter spoofing defense, and 4 dedicated adversarial tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping in child process, builtins corruption immunity, and frame inspection defense).
+* **Persistent SQLite Checkpointing (7 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, and retention policy purging (`purge_old_checkpoints`).
 * **Structured Logging & Observability (2 tests):** Structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 * **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 

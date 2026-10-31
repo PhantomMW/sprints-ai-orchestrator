@@ -24,6 +24,15 @@ ALLOWED_COLUMNS = {
     "readiness_status",
 }
 
+# Role-based access control for accessing learner PII
+AUTHORIZED_QUERY_ROLES = {
+    "advisor",
+    "career_advisor",
+    "instructor",
+    "admin",
+    "system",
+}
+
 
 def _ensure_db_exists() -> bool:
     """Check if the configured SQLite database file exists on disk."""
@@ -34,11 +43,12 @@ def _ensure_db_exists() -> bool:
 # Safe Parameterized Domain Operations (Strictly No Arbitrary SQL Execution)
 # ==============================================================================
 
-def get_learner_by_id(student_id: str) -> dict[str, Any]:
+def get_learner_by_id(student_id: str, requester_role: str = "advisor") -> dict[str, Any]:
     """
     Retrieve an individual learner profile using a safe, parameterized SQL query.
 
     Privacy and Security Controls:
+        - Role-based authorization: Rejects unauthorized callers (e.g. public or unauthenticated students).
         - Uses strictly parameterized queries (? placeholder).
         - Enforces targeted, single-learner isolation: returns exactly one record.
         - Never executes arbitrary SQL strings or broad SELECT * scans.
@@ -46,10 +56,19 @@ def get_learner_by_id(student_id: str) -> dict[str, Any]:
 
     Args:
         student_id: Learner identifier (e.g. 'SYN-DEMO-01').
+        requester_role: Calling agent/user role (must be in AUTHORIZED_QUERY_ROLES).
 
     Returns:
         Dictionary with status 'success' and learner data in a bounded list.
     """
+    if str(requester_role).strip().casefold() not in AUTHORIZED_QUERY_ROLES:
+        return {
+            "status": "error",
+            "message": f"Unauthorized access: Caller role '{requester_role}' is not permitted to query learner PII.",
+            "row_count": 0,
+            "data": [],
+        }
+
     if not isinstance(student_id, str) or not student_id.strip():
         return {
             "status": "error",
@@ -113,11 +132,16 @@ def get_learner_by_id(student_id: str) -> dict[str, Any]:
         }
 
 
-def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -> dict[str, Any]:
+def search_learners_by_track(
+    bootcamp_track: str,
+    limit: int = MAX_QUERY_ROWS,
+    requester_role: str = "advisor",
+) -> dict[str, Any]:
     """
     Retrieve learners enrolled in a specific bootcamp track using a parameterized query.
 
     Privacy and Security Controls:
+        - Role-based authorization: Rejects unauthorized callers.
         - Uses strictly parameterized queries (? placeholder).
         - Capped at MAX_QUERY_ROWS (5) to prevent bulk extraction.
         - Column projection restricted to verified ALLOWED_COLUMNS.
@@ -126,10 +150,19 @@ def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -
     Args:
         bootcamp_track: Track name (e.g. 'Advanced Agentic AI').
         limit: Maximum rows to return (capped at MAX_QUERY_ROWS).
+        requester_role: Calling agent/user role (must be in AUTHORIZED_QUERY_ROLES).
 
     Returns:
         Bounded list of learners in the specified track.
     """
+    if str(requester_role).strip().casefold() not in AUTHORIZED_QUERY_ROLES:
+        return {
+            "status": "error",
+            "message": f"Unauthorized access: Caller role '{requester_role}' is not permitted to query learner PII.",
+            "row_count": 0,
+            "data": [],
+        }
+
     if not isinstance(bootcamp_track, str) or not bootcamp_track.strip():
         return {
             "status": "error",
@@ -234,13 +267,12 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
                     return {
                         "status": "error",
                         "message": (
-                            f"Cohort size ({cohort_count}) is below minimum privacy threshold "
-                            f"({MIN_COHORT_SIZE}). Aggregation restricted to prevent identification."
+                            f"Aggregation suppressed: Cohort size is below the privacy threshold "
+                            f"(k={MIN_COHORT_SIZE}). Individual re-identification protection active."
                         ),
                         "data": {
                             "privacy_restricted": True,
                             "min_cohort_size": MIN_COHORT_SIZE,
-                            "cohort_count": cohort_count,
                         },
                     }
 
@@ -264,13 +296,12 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
                     return {
                         "status": "error",
                         "message": (
-                            f"Total cohort size ({cohort_count}) is below minimum privacy threshold "
-                            f"({MIN_COHORT_SIZE}). Aggregation restricted."
+                            f"Aggregation suppressed: Cohort size is below the privacy threshold "
+                            f"(k={MIN_COHORT_SIZE}). Individual re-identification protection active."
                         ),
                         "data": {
                             "privacy_restricted": True,
                             "min_cohort_size": MIN_COHORT_SIZE,
-                            "cohort_count": cohort_count,
                         },
                     }
 

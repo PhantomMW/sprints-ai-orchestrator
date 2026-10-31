@@ -1039,17 +1039,17 @@ The test suite contains **63 automated tests** across 10 test suites spanning ag
 
 - `tests/test_agents/test_evaluator_optimizer.py` (2 tests): validates iteration limits and optimization convergence.
 
-- `tests/test_agents/test_orchestrator_evaluator.py` (6 tests): validates LangGraph routing, assessment evaluator routing, Human-in-the-Loop interrupt/resume cycles, and reviewer authentication RBAC rejection.
+- `tests/test_agents/test_orchestrator_evaluator.py` (8 tests): validates LangGraph routing, assessment evaluator routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC-SHA256 reviewer token verification, signature tampering rejection, and anti-replay defense.
 
 - `tests/test_agents/test_assessor_agent.py` (4 tests): validates single-pass automated unit test runner integration, execution failure handling, fail-closed runner crash abortion, and deterministic assertion failure score capping.
 
 - `tests/test_agents/test_live_gemini_integration.py` (1 test): validates live Google Gemini API connectivity and structured generation when live credentials are provided.
 
-- `tests/test_tools/test_db_queries.py` (15 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, and k-anonymity cohort threshold (`MIN_COHORT_SIZE = 3`).
+- `tests/test_tools/test_db_queries.py` (17 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), and k-anonymity cohort threshold (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage in error messages.
 
-- `tests/test_tools/test_test_runner.py` (12 tests): validates test parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, true OS process isolation (`os.fork()`), and fake metrics delimiter protection.
+- `tests/test_tools/test_test_runner.py` (16 tests): validates test parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` trapping, true OS process isolation (`os.fork()`), delimiter spoofing defense, and 4 dedicated adversarial tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` child trapping, builtins corruption immunity, and frame inspection defense).
 
-- `tests/test_tools/test_sqlite_checkpoint.py` (5 tests): validates cross-instance state persistence, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, and true cross-process persistence spanning separate OS Python processes.
+- `tests/test_tools/test_sqlite_checkpoint.py` (7 tests): validates cross-instance state persistence, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, and retention policy purging (`purge_old_checkpoints`).
 
 - `tests/test_tools/test_logger.py` (2 tests): validates structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 
@@ -1148,7 +1148,7 @@ Continuous Integration is automated via GitHub Actions (`.github/workflows/tests
 
                           tool test suite         integration benchmarks
 
-                          (63 tests passed; CI)
+                          (73 tests: 72 passed, 1 skipped in CI)
 
 
 
@@ -1184,13 +1184,15 @@ approval checkpoint.
 
 
 
-The project has a working prototype structure and a reported passing
+The project has a working prototype structure and an extensive passing
 
-test suite. Its key constraints are the limited project-context
+test suite (73 automated tests). Its architecture incorporates multi-layer process isolation,
 
-knowledge base, lack of live vacancy data, in-memory checkpointing, and
+durable SQLite checkpointing with HMAC payload signing, role-based HITL authentication,
 
-the need for further sandbox hardening and tool-level tests. These
+and k-anonymity cohort protection. Its current prototype boundaries include the limited project-context
+
+knowledge base and the absence of live vacancy feeds. These
 
 limitations should remain explicit in any demo, report, or presentation.
 

@@ -179,7 +179,8 @@ def test_get_track_aggregate_stats_enforces_minimum_cohort_size(setup_test_db):
     res_small = get_track_aggregate_stats("Rare Quantum Track")
     assert res_small["status"] == "error"
     assert res_small["data"]["privacy_restricted"] is True
-    assert "minimum privacy threshold" in res_small["message"]
+    assert "privacy threshold" in res_small["message"]
+    assert "cohort_count" not in res_small["data"]  # Proves exact small count is not leaked
 
     # Cohort with 7 learners satisfies privacy threshold
     res_large = get_track_aggregate_stats("Advanced Agentic AI")
@@ -193,3 +194,25 @@ def test_get_track_aggregate_stats_tool():
     res = get_track_aggregate_stats_tool.invoke({})
     assert res["status"] == "success"
     assert res["data"]["learner_count"] == 14
+
+
+def test_get_learner_by_id_role_authorization():
+    """Verify that unauthorized roles cannot query learner PII."""
+    # Allowed role succeeds
+    res_auth = get_learner_by_id("SPR-1001", requester_role="advisor")
+    assert res_auth["status"] == "success"
+    assert res_auth["row_count"] == 1
+
+    # Unauthorized role is blocked
+    res_unauth = get_learner_by_id("SPR-1001", requester_role="unauthorized_public_user")
+    assert res_unauth["status"] == "error"
+    assert res_unauth["row_count"] == 0
+    assert "Unauthorized access" in res_unauth["message"]
+
+
+def test_search_learners_by_track_role_authorization():
+    """Verify that unauthorized roles cannot search learners."""
+    res_unauth = search_learners_by_track("Advanced Agentic AI", requester_role="student_guest")
+    assert res_unauth["status"] == "error"
+    assert res_unauth["row_count"] == 0
+    assert "Unauthorized access" in res_unauth["message"]
