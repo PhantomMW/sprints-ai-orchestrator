@@ -1,3 +1,4 @@
+import sqlite3
 from unittest.mock import patch
 import pytest
 from langchain_core.messages import HumanMessage
@@ -11,6 +12,45 @@ from src.utils.auth import (
     login_and_issue_token,
     verify_reviewer_auth,
 )
+
+
+@pytest.fixture(autouse=True)
+def setup_synthetic_learners_db(tmp_path, monkeypatch):
+    """
+    Provide an isolated synthetic SQLite database for E2E tests.
+    Ensures zero reliance on uncommitted production data and 100% CI reproducibility.
+    """
+    test_db = tmp_path / "synthetic_sprints_learners.sqlite3"
+    with sqlite3.connect(test_db) as conn:
+        conn.execute("""
+            CREATE TABLE learners (
+                learner_id TEXT PRIMARY KEY,
+                name TEXT,
+                bootcamp_track TEXT,
+                completed_modules INTEGER,
+                python_assignment_score INTEGER,
+                target_salary_egp INTEGER,
+                preferred_employers TEXT,
+                readiness_status TEXT
+            )
+        """)
+        conn.execute(
+            """
+            INSERT INTO learners VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "SPR-1001",
+                "Ahmed Youssef",
+                "Advanced Agentic AI",
+                12,
+                95,
+                30000,
+                "Fawry, Swvl",
+                "Ready for Placement",
+            ),
+        )
+    monkeypatch.setattr("src.tools.db_queries.DB_PATH", test_db)
+    yield test_db
 
 
 def _mock_advisor_response():
