@@ -261,4 +261,3 @@ The ultimate goal is to provide a unified AI-powered learner support system that
 **Language:** Python
 **Orchestration:** LangGraph
 **LLM:** Google Gemini
-**Repository:** https://github.com/PhantomMW/sprints-ai-orchestrator
