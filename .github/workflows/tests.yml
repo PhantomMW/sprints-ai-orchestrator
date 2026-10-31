@@ -35,6 +35,19 @@ jobs:
           set -o pipefail
           pytest -v --tb=short 2>&1 | tee pytest_output.txt
 
+      - name: Annotate Pytest Failures
+        if: always()
+        run: |
+          python -c '
+          import os
+          if os.path.exists("pytest_output.txt"):
+              with open("pytest_output.txt") as f:
+                  for line in f:
+                      if "FAILED" in line or "ERROR" in line:
+                          clean = line.strip().replace("\n", " ").replace("::", " - ")
+                          print(f"::error title=TestFailure::{clean}")
+          '
+
       - name: Publish Test Summary
         if: always()
         run: |
