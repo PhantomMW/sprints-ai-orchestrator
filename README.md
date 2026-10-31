@@ -1,8 +1,8 @@
 # Sprints Multi-Agent AI Career & Assessment Orchestrator
 
-An AI-powered multi-agent system designed to automate learner support, Python assignment assessment, and career guidance for Sprints learners.
+An AI-powered multi-agent system designed to automate learner support, restricted Python assignment assessment, and career guidance for Sprints learners.
 
-Built with **LangGraph**, **LangChain**, **Google Gemini**, **ChromaDB**, **SQLite**, and **Docker**, the system combines specialized AI agents into a centralized workflow with structured outputs, retrieval evaluation, and human-in-the-loop approval.
+Built with **LangGraph**, **LangChain**, **Google Gemini**, **ChromaDB**, **SQLite**, and **Docker**, the system combines specialized AI agents into a centralized workflow with structured outputs, retrieval evaluation, automated test validation, and human-in-the-loop approval.
 
 ---
 
@@ -10,9 +10,9 @@ Built with **LangGraph**, **LangChain**, **Google Gemini**, **ChromaDB**, **SQLi
 
 The Sprints AI Orchestrator addresses three major workflows:
 
-1. **Career Guidance:** Provides personalized career recommendations using learner profiles and retrieved knowledge.
-2. **Python Assessment:** Executes submitted Python code in a Docker container and generates structured assessment feedback.
-3. **Human-in-the-Loop:** Pauses selected career recommendations for human review before approval.
+1. **Career Guidance:** Provides personalized career recommendations using verified learner profiles and retrieved knowledge.
+2. **Python Assessment:** Executes submitted Python code within a restricted Docker-based execution prototype and generates structured assessment feedback.
+3. **Human-in-the-Loop:** Pauses selected career recommendations for human review before final approval.
 
 A centralized LangGraph workflow routes requests to specialized agents and sends successful results through an Evaluator-Optimizer stage.
 
@@ -29,7 +29,8 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
              v                       v
        Career Advisor           Python Assessor
              |                       |
-       SQLite Learner DB        Docker Sandbox
+       SQLite Learner DB      Docker Prototype
+       (Privacy-Restricted)   (Resource-Bounded)
              |
         Agentic RAG
              |
@@ -54,11 +55,12 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 ### 3.1 Career Advisor Agent
 
-* Retrieves learner information from SQLite.
+* Retrieves learner information from SQLite using privacy-hardened queries.
+* Recommends `get_learner_by_id()` as the primary parameterized lookup to ensure strict learner isolation and prevent cross-learner data exposure.
+* SQL tool strictly enforces a 5-row maximum, column allowlisting, and blocks SQL comments and system metadata (`sqlite_master`, `pragma`).
 * Uses ChromaDB to retrieve relevant knowledge.
 * Implements Agentic RAG with retrieval self-reflection.
-* Reformulates search queries when retrieved evidence is insufficient.
-* Supports up to three retrieval attempts.
+* Reformulates search queries when retrieved evidence is insufficient (up to 3 retrieval attempts).
 * Generates structured career recommendations using Pydantic.
 * Distinguishes verified learner information from AI-generated recommendations.
 * Does not claim that an employer has an active vacancy without verified vacancy data.
@@ -66,10 +68,18 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 ### 3.2 Python Assessor Agent
 
 * Accepts Python code and assignment requirements.
-* Executes code inside a Docker container.
-* Applies resource restrictions, execution timeouts, and bounded output capture (64 KiB per stream).
+* Executes code inside a restricted Docker container prototype (`sprints-python-sandbox:latest`).
+* Applies strict isolation and resource bounds:
+  * Network disabled (`--network none`).
+  * Read-only container root filesystem (`--read-only`).
+  * Non-root user (UID 10001).
+  * 128 MB RAM, 0.5 CPU quota, 64 PID limit.
+  * Temporary storage capped at 16 MB tmpfs (`noexec`, `nosuid`).
+  * All Linux capabilities dropped (`--cap-drop ALL`, `no-new-privileges`).
+  * 5-second wall-clock execution timeout with automated container stopping and removal.
+  * Bounded output capture: stdout and stderr capped at 64 KiB each with chunk draining to prevent pipe deadlocks.
+  * Stdin-piped execution preventing shell injection and quote escaping anomalies.
 * Returns structured grading feedback.
-* Preserves actual execution results and assessment scores.
 * Returns an `Unable to Verify` response when execution fails.
 
 ### 3.3 Evaluator-Optimizer
@@ -91,27 +101,31 @@ Human approval represents approval of a recommendation, not confirmation of empl
 
 ## 4. Technology Stack
 
-| Component            | Technology            |
-| -------------------- | --------------------- |
-| Programming Language | Python 3.10           |
-| Agent Orchestration  | LangGraph             |
-| LLM                  | Google Gemini         |
-| LLM Integration      | LangChain             |
-| Structured Outputs   | Pydantic              |
-| Vector Database      | ChromaDB              |
-| Relational Database  | SQLite                |
-| Embeddings           | Sentence Transformers |
-| Code Execution       | Docker                |
-| Checkpointing        | LangGraph MemorySaver |
-| Testing              | Pytest                |
+| Component            | Technology                     |
+| -------------------- | ------------------------------ |
+| Programming Language | Python 3.10                    |
+| Agent Orchestration  | LangGraph                      |
+| LLM                  | Google Gemini                  |
+| LLM Integration      | LangChain                      |
+| Structured Outputs   | Pydantic                       |
+| Vector Database      | ChromaDB                       |
+| Relational Database  | SQLite (Read-Only, Restricted) |
+| Embeddings           | Sentence Transformers          |
+| Code Execution       | Docker Sandbox Prototype       |
+| Checkpointing        | LangGraph MemorySaver          |
+| Testing & CI         | Pytest, GitHub Actions         |
 
 ## 5. Project Structure
 
 ```text
 sprints-ai-orchestrator/
 │
+├── .github/
+│   └── workflows/
+│       └── tests.yml            # Automated CI test workflow
+│
 ├── sandbox/
-│   └── Dockerfile
+│   └── Dockerfile               # Non-root, isolated Python execution container
 │
 ├── src/
 │   ├── agents/
@@ -123,8 +137,8 @@ sprints-ai-orchestrator/
 │   ├── tools/
 │   │   ├── rag_retriever.py
 │   │   ├── code_repl.py
-│   │   ├── docker_executor.py
-│   │   ├── db_queries.py
+│   │   ├── docker_executor.py   # Bounded Docker executor with timeout & output caps
+│   │   ├── db_queries.py        # Privacy-hardened SQLite query tool
 │   │   ├── document_loader.py
 │   │   └── audio_transcriber.py
 │   │
@@ -139,14 +153,23 @@ sprints-ai-orchestrator/
 │   └── TECHNICAL_DOCUMENTATION.md
 │
 ├── tests/
-│   └── test_agents/
+│   ├── test_agents/
+│   │   ├── test_agentic_rag.py
+│   │   ├── test_evaluator_optimizer.py
+│   │   └── test_orchestrator_evaluator.py
+│   │
+│   └── test_tools/
+│       ├── test_db_queries.py      # SQLite privacy, row bounding & security tests
+│       └── test_docker_executor.py # Docker runtime, timeout, truncation & isolation tests
 │
-├── requirements.txt
-├── README.md
+├── pytest.ini                   # Pytest configuration and path discovery
+├── LICENSE                      # MIT Open Source License
+├── requirements.txt             # Project dependencies (UTF-8)
+├── README.md                    # Project documentation
 └── .gitignore
 ```
 
-**Note:** Local datasets, learner records, database files, and vector database artifacts are excluded from the public repository. They must be prepared locally before running workflows that depend on them.
+**Note:** Local datasets, identifiable learner records, database files, and vector database artifacts are excluded from the public repository. They must be prepared locally before running workflows that depend on them.
 
 ## 6. Installation and Setup
 
@@ -173,9 +196,16 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
+Linux / macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
 ### Install Dependencies
 
-```powershell
+```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
@@ -192,29 +222,33 @@ Never commit `.env` or expose API credentials.
 
 ### Build the Docker Sandbox
 
-```powershell
+```bash
 docker build -t sprints-python-sandbox:latest -f sandbox/Dockerfile .
 ```
 
 Ensure Docker Desktop is running before using the Python Assessor.
 
-**Important:** Local learner databases, learner exports, client source materials, and ChromaDB data must be prepared separately. They are intentionally excluded from this public repository. Use synthetic learner records for demos; never publish identifiable learner data without explicit authorization.
-
 ## 7. Running the Tests
 
-Run the complete test suite:
+Run the complete test suite (agent workflows, database query privacy, and Docker runtime):
 
-```powershell
-python -m pytest -v
+```bash
+pytest -v
 ```
 
 Run a specific test file:
 
-```powershell
-python -m pytest -v tests/test_agents/test_orchestrator_evaluator.py
+```bash
+pytest -v tests/test_tools/test_docker_executor.py
+pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The latest previously reported full test run completed with **9 passing tests**. This result should be revalidated before each final release.
+The comprehensive test suite currently consists of **34 passing tests** covering:
+* **Agent Workflows (9 tests):** Agentic RAG retries, evaluator-optimizer bounds, routing, and Human-in-the-Loop interrupt/resume cycles.
+* **Database Privacy & Tools (11 tests):** Bounded 5-row limits, column allowlisting, non-SELECT rejection, multi-statement blocking, SQL comment prevention, system table protection, and parameterized single-learner isolation.
+* **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
+
+Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.
 
 ## 8. Knowledge Retrieval
 
@@ -237,18 +271,18 @@ Previously recorded evaluation results:
 * Human approval does not represent employer acceptance.
 * The current RAG collection requires additional official curriculum material.
 * MemorySaver provides in-memory checkpointing and is not persistent across application restarts.
-* Docker execution is a prototype sandbox. Output capture is capped at 64 KiB per stream, but additional isolation and an independent security review are required before accepting untrusted public workloads.
+* Docker execution is a restricted prototype sandbox with 64 KiB output caps, memory/CPU quotas, and dropped capabilities. It is not a certified production sandbox; untrusted public execution in production requires microVM isolation (e.g., gVisor, Firecracker) and dedicated security audits.
 * Gemini API usage depends on the configured account's quota and rate limits.
 * Local learner data and knowledge-base files are not distributed with the public repository.
 
 ## 10. Future Improvements
 
 * Integrate an authenticated live job-opening database.
-* Add persistent checkpoint storage.
+* Add persistent checkpoint storage (e.g., PostgreSQL).
 * Expand the official curriculum knowledge base.
 * Improve retrieval evaluation using a larger benchmark.
-* Add a user interface for learner requests and human reviewers.
-* Strengthen sandbox security and resource-output limits.
+* Add a web user interface for learner requests and human reviewers.
+* Upgrade prototype code execution to microVMs (gVisor or Firecracker).
 * Add end-to-end integration testing.
 
 ## 11. Project Goal
@@ -261,3 +295,4 @@ The ultimate goal is to provide a unified AI-powered learner support system that
 **Language:** Python
 **Orchestration:** LangGraph
 **LLM:** Google Gemini
+**License:** MIT
