@@ -67,7 +67,7 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 * Accepts Python code and assignment requirements.
 * Executes code inside a Docker container.
-* Applies resource restrictions and execution timeouts.
+* Applies resource restrictions, execution timeouts, and bounded output capture (64 KiB per stream).
 * Returns structured grading feedback.
 * Preserves actual execution results and assessment scores.
 * Returns an `Unable to Verify` response when execution fails.
@@ -198,7 +198,7 @@ docker build -t sprints-python-sandbox:latest -f sandbox/Dockerfile .
 
 Ensure Docker Desktop is running before using the Python Assessor.
 
-**Important:** Local learner database and ChromaDB data must be prepared separately. They are not included in the public repository.
+**Important:** Local learner databases, learner exports, client source materials, and ChromaDB data must be prepared separately. They are intentionally excluded from this public repository. Use synthetic learner records for demos; never publish identifiable learner data without explicit authorization.
 
 ## 7. Running the Tests
 
@@ -237,7 +237,7 @@ Previously recorded evaluation results:
 * Human approval does not represent employer acceptance.
 * The current RAG collection requires additional official curriculum material.
 * MemorySaver provides in-memory checkpointing and is not persistent across application restarts.
-* Docker execution is a prototype sandbox and requires additional security hardening before accepting untrusted public workloads.
+* Docker execution is a prototype sandbox. Output capture is capped at 64 KiB per stream, but additional isolation and an independent security review are required before accepting untrusted public workloads.
 * Gemini API usage depends on the configured account's quota and rate limits.
 * Local learner data and knowledge-base files are not distributed with the public repository.
 
