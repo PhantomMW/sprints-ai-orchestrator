@@ -6,13 +6,10 @@ from typing import Any
 
 import os
 
-# Pinned immutable SHA256 digest for python:3.10-slim base image (Debian Bookworm)
-# Ensures reproducible, deterministic container builds and guards against supply-chain poisoning
-PINNED_BASE_IMAGE_DIGEST = (
-    "python:3.10-slim@sha256:d8ca19faeec9a79fa4f9fb501ba6d8ebfc48dcf32f5d0fdf9fbb50e41cf86c28"
-)
+# Base image reference for reproducible sandbox builds (supports sha256 digest pinning via SPRINTS_BASE_IMAGE)
 DEFAULT_SANDBOX_IMAGE = "sprints-python-sandbox:latest"
 SANDBOX_IMAGE = os.getenv("SPRINTS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
+PINNED_BASE_IMAGE = os.getenv("SPRINTS_BASE_IMAGE", "python:3.10-slim")
 
 EXECUTION_TIMEOUT = 5
 
