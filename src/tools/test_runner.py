@@ -127,6 +127,17 @@ _safe_orig_stdout = sys.stdout
 _safe_json_dumps = json.dumps
 _safe_has_fork = callable(_safe_fork) and callable(_safe_waitpid) and callable(_safe_pipe) and callable(_safe_exit)
 
+# Neutralize stack introspection vectors to prevent student code from walking/clearing parent frames
+for _attr in ("_getframe", "_current_frames"):
+    if hasattr(sys, _attr):
+        try:
+            delattr(sys, _attr)
+        except Exception:
+            try:
+                setattr(sys, _attr, None)
+            except Exception:
+                pass
+
 _code_str = {repr(code)}
 _start_marker = {repr(start_marker)}
 _end_marker = {repr(end_marker)}
