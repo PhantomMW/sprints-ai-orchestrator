@@ -370,3 +370,21 @@ def get_learner_by_id_tool(student_id: str) -> dict[str, Any]:
     Recommended parameterized tool for learner profile lookups.
     """
     return get_learner_by_id(student_id)
+
+
+@tool
+def search_learners_by_track_tool(bootcamp_track: str) -> dict[str, Any]:
+    """
+    Safely retrieve learners enrolled in a specific bootcamp track.
+
+    Parameterized tool ensuring safe query execution without raw SQL strings.
+    """
+    return search_learners_by_track(bootcamp_track)
+
+
+@tool
+def get_track_aggregate_stats_tool() -> dict[str, Any]:
+    """
+    Retrieve aggregate learner metrics (average scores, counts) without exposing individual rows.
+    """
+    return get_track_aggregate_stats()

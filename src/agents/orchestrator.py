@@ -10,6 +10,7 @@ from src.agents.advisor_agent import generate_career_advice
 from src.agents.assessor_agent import assess_python_code
 from src.agents.evaluator_optimizer import evaluate_and_optimize
 from src.state import AgentState
+from src.tools.sqlite_checkpoint import SqliteSaver
 
 
 MAX_OPTIMIZATION_ITERATIONS = 3
@@ -502,7 +503,7 @@ def build_orchestrator(checkpointer=None):
     workflow.add_edge("placement_review", END)
     workflow.add_edge("error", END)
 
-    saver = checkpointer if checkpointer is not None else MemorySaver()
+    saver = checkpointer if checkpointer is not None else SqliteSaver()
 
     return workflow.compile(checkpointer=saver)
 

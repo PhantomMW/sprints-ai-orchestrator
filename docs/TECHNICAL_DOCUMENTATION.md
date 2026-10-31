@@ -136,9 +136,13 @@ applications.
 
 
 
-The graph is implemented with `StateGraph(AgentState)`. A `MemorySaver`
+The graph is implemented with `StateGraph(AgentState)`. A persistent `SqliteSaver`
 
-checkpointer is attached when the graph is compiled.
+checkpointer is attached by default when the graph is compiled, saving thread
+
+checkpoints and writes to `data/orchestrator_checkpoints.sqlite3`. An `InMemorySaver`
+
+is also supported for ephemeral testing.
 
 
 
@@ -220,6 +224,12 @@ The public repository contains source code, tests, configuration, and documentat
 
 sprints-ai-orchestrator/
 
+├── .github/
+
+│   └── workflows/
+
+│       └── tests.yml
+
 ├── sandbox/
 
 │   └── Dockerfile
@@ -228,7 +238,25 @@ sprints-ai-orchestrator/
 
 │   ├── agents/
 
+│   │   ├── advisor_agent.py
+
+│   │   ├── assessor_agent.py
+
+│   │   ├── evaluator_optimizer.py
+
+│   │   └── orchestrator.py
+
 │   ├── tools/
+
+│   │   ├── db_queries.py
+
+│   │   ├── docker_executor.py
+
+│   │   ├── rag_retriever.py
+
+│   │   ├── sqlite_checkpoint.py
+
+│   │   └── test_runner.py
 
 │   ├── state.py
 
@@ -238,11 +266,35 @@ sprints-ai-orchestrator/
 
 ├── docs/
 
+│   ├── DEMO_SCRIPT.md
+
+│   └── TECHNICAL_DOCUMENTATION.md
+
 ├── tests/
 
 │   ├── test_agents/
 
-│   └── test_tools/       # tool-level tests
+│   │   ├── test_agentic_rag.py
+
+│   │   ├── test_assessor_agent.py
+
+│   │   ├── test_evaluator_optimizer.py
+
+│   │   └── test_orchestrator_evaluator.py
+
+│   └── test_tools/
+
+│       ├── test_db_queries.py
+
+│       ├── test_docker_executor.py
+
+│       ├── test_sqlite_checkpoint.py
+
+│       └── test_test_runner.py
+
+├── LICENSE
+
+├── pytest.ini
 
 ├── requirements.txt
 
@@ -470,17 +522,27 @@ of 60 in the assessor.
 
 
 
-`src/main.py` currently demonstrates this workflow with two sample
+`src/tools/test_runner.py` executes automated unit test assertions against
 
-submissions: - A correct list sum and average implementation. - An
+the learner's code. To prevent student code from forging success reports,
 
-incorrect average calculation.
+a cryptographically unique UUID session token wraps metric emission. If assertions
+
+fail or syntax errors occur, programmatic guardrails cap the grade and enforce
+
+a failing status.
 
 
 
-The current `main.py` is an assessor demonstration entry point; it is
+`src/main.py` provides an Interactive CLI (`--mode interactive`) and an Automated Demo
 
-not a complete interactive application interface for all agents.
+(`--mode demo`) driving the central LangGraph Orchestrator. The demo executes both
+
+Career Advisor and Python Assessor workflows using synthetic learner profiles
+
+(`SYN-DEMO-01`), guaranteeing zero personal data leakage, and handles Human-in-the-Loop
+
+review interruptions.
 
 
 
@@ -662,15 +724,17 @@ employer, or submit an application.
 
 
 
-### Checkpointing limitation
+### Persistent Checkpointing
 
 
 
-The graph is compiled with `MemorySaver`. This is in-memory
+The graph is compiled with `SqliteSaver` by default, storing thread checkpoints,
 
-checkpointing for the running process; it should not be described as
+intermediate writes, and channel states in `data/orchestrator_checkpoints.sqlite3`.
 
-durable storage across application restarts.
+This provides persistent checkpoint storage across process restarts and supports
+
+resuming interrupted Human-in-the-Loop placement reviews.
 
 
 
@@ -956,11 +1020,11 @@ All 34 tests run in approximately 24 seconds and pass with 100% success. Continu
 
 
 
-  Checkpointing           `MemorySaver` is        Add a durable
+  Checkpointing           `SqliteSaver` local     Evaluate distributed
 
-                          in-memory               checkpointer for
+                          SQLite storage; single  checkpointers (Postgres)
 
-                                                  restart-safe sessions
+                          node deployment         for distributed clusters
 
 
 
@@ -980,13 +1044,15 @@ All 34 tests run in approximately 24 seconds and pass with 100% success. Continu
 
                           tool test suite         integration benchmarks
 
-                          (34 tests passed; CI)
+                          (47 tests passed; CI)
 
 
 
-  User interface          `main.py` is a          Build a validated API
+  User interface          CLI only (`--mode       Build a web dashboard
 
-                          demonstration script    or UI layer
+                          interactive/demo`)      (FastAPI/React) for
+
+                                                  students & advisors
 
 
 

@@ -114,7 +114,7 @@ Human approval represents approval of a recommendation, not confirmation of empl
 | Relational Database  | SQLite (Read-Only, Restricted) |
 | Embeddings           | Sentence Transformers          |
 | Code Execution       | Docker Sandbox Prototype       |
-| Checkpointing        | LangGraph MemorySaver          |
+| Checkpointing        | SqliteSaver (SQLite Persistent)|
 | Testing & CI         | Pytest, GitHub Actions         |
 
 ## 5. Project Structure
@@ -140,6 +140,7 @@ sprints-ai-orchestrator/
 │   │   ├── test_runner.py       # Deterministic unit test runner harness
 │   │   ├── docker_executor.py   # Bounded Docker executor with timeout & output caps
 │   │   ├── db_queries.py        # Safe parameterized domain operations
+│   │   ├── sqlite_checkpoint.py # Persistent SQLite checkpointer
 │   │   ├── rag_retriever.py
 │   │   ├── code_repl.py
 │   │   ├── document_loader.py
@@ -163,6 +164,7 @@ sprints-ai-orchestrator/
 │   │   └── test_assessor_agent.py
 │   │
 │   └── test_tools/
+│       ├── test_sqlite_checkpoint.py # Persistent checkpointer cross-instance tests
 │       ├── test_db_queries.py      # Synthetic isolated database fixture tests
 │       ├── test_test_runner.py     # Deterministic unit test runner tests
 │       └── test_docker_executor.py # Docker runtime, timeout, truncation & isolation tests
@@ -262,10 +264,11 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **45 passing tests** (100% pass rate) covering:
+The comprehensive test suite currently consists of **47 passing tests** (100% pass rate) covering:
 * **Agent Workflows & Assessment (11 tests):** Agentic RAG retries, evaluator-optimizer bounds, routing, Human-in-the-Loop interrupt/resume cycles, and Assessor Agent deterministic test runner integration.
 * **Database Privacy & Domain Operations (14 tests):** Safe parameterized single-learner lookups, track searches, aggregate metrics, row bounding (5 max), column allowlisting, SQL comment and system table blocking, verified with an isolated synthetic database fixture.
 * **Automated Test Runner (6 tests):** Test case parsing, deterministic assertion evaluation, pass percentage calculations, expected stdout matching, and compilation failure capture.
+* **Persistent SQLite Checkpointing (2 tests):** Cross-instance state restoration, thread isolation, and persistent task writes.
 * **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.
@@ -290,7 +293,7 @@ Previously recorded evaluation results:
 * Career recommendations are not employment guarantees.
 * Human approval does not represent employer acceptance.
 * The current RAG collection requires additional official curriculum material.
-* MemorySaver provides in-memory checkpointing and is not persistent across application restarts.
+* Checkpointing is handled locally via `SqliteSaver` SQLite database; distributed deployments would benefit from PostgreSQL checkpointers.
 * Docker execution is a restricted prototype sandbox with 64 KiB output caps, memory/CPU quotas, and dropped capabilities. It is not a certified production sandbox; untrusted public execution in production requires microVM isolation (e.g., gVisor, Firecracker) and dedicated security audits.
 * Gemini API usage depends on the configured account's quota and rate limits.
 * Local learner data and knowledge-base files are not distributed with the public repository.

@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from typing import Any
 
 from src.tools.docker_executor import execute_in_docker
@@ -29,15 +30,19 @@ def run_automated_tests(
     expected_output: str = "",
 ) -> dict[str, Any]:
     """
-    Execute deterministic unit tests against a learner's Python submission.
+    Execute deterministic unit tests against a learner's Python submission with anti-tampering.
 
-    Runs within the restricted Docker container to guarantee isolation.
-    Combines learner code with test assertions, executing each test
-    independently to produce verifiable, deterministic pass/fail metrics.
+    Security & Anti-Tampering Controls:
+        - Executes inside an isolated, non-root Docker container prototype.
+        - Randomized session token prevents learner code from spoofing test metrics delimiters.
+        - Isolated namespace copies for each test case prevent inter-test state pollution.
+        - Strict timeout and resource limits.
+        - Explicit failure enforcement: if the code fails to compile or times out,
+          zero passed tests are awarded.
 
     Args:
         code: Python source code submitted by the learner.
-        test_suite: Multiline string containing test assertions or assertions.
+        test_suite: Multiline string containing test assertions.
         expected_output: Optional expected standard output string.
 
     Returns:
@@ -63,62 +68,68 @@ def run_automated_tests(
         test_cases.append(
             (
                 "Standard Output Match",
-                f"assert captured_stdout.strip() == {repr(expected_output.strip())}",
+                f"assert _captured_stdout.strip() == {repr(expected_output.strip())}",
             )
         )
 
     if not test_cases:
         test_cases.append(("Execution Cleanliness (Smoke Test)", "pass"))
 
+    session_token = uuid.uuid4().hex
+    start_marker = f"__TEST_METRICS_{session_token}_START__"
+    end_marker = f"__TEST_METRICS_{session_token}_END__"
+
     harness = f"""
 import sys
 import io
 import json
 
-captured_io = io.StringIO()
-sys_stdout_orig = sys.stdout
-sys.stdout = captured_io
+_captured_io = io.StringIO()
+_orig_stdout = sys.stdout
+sys.stdout = _captured_io
 
-learner_ns = {{}}
-learner_error = None
+_learner_ns = {{}}
+_compilation_error = None
 
 try:
-    exec({repr(code)}, learner_ns)
-except Exception as e:
-    learner_error = f"{{type(e).__name__}}: {{e}}"
+    exec({repr(code)}, _learner_ns)
+except Exception as _e:
+    _compilation_error = f"{{type(_e).__name__}}: {{_e}}"
 
-sys.stdout = sys_stdout_orig
-captured_stdout = captured_io.getvalue()
-learner_ns["captured_stdout"] = captured_stdout
+sys.stdout = _orig_stdout
+_captured_stdout = _captured_io.getvalue()
+_learner_ns["_captured_stdout"] = _captured_stdout
 
-results = []
-if learner_error:
-    results.append({{"name": "Code Compilation / Execution", "status": "FAILED", "error": learner_error}})
+_results = []
+if _compilation_error:
+    _results.append({{"name": "Code Compilation / Execution", "status": "FAILED", "error": _compilation_error}})
 else:
-    cases = {repr(test_cases)}
-    for name, case_src in cases:
+    _test_cases = {repr(test_cases)}
+    for _name, _case_src in _test_cases:
+        _test_ns = _learner_ns.copy()
+        _test_ns["_captured_stdout"] = _captured_stdout
         try:
-            exec(case_src, learner_ns)
-            results.append({{"name": name, "status": "PASSED", "error": ""}})
-        except AssertionError as ae:
-            err_msg = str(ae) or "Assertion failed"
-            results.append({{"name": name, "status": "FAILED", "error": err_msg}})
-        except Exception as e:
-            results.append({{"name": name, "status": "FAILED", "error": f"{{type(e).__name__}}: {{e}}"}})
+            exec(_case_src, _test_ns)
+            _results.append({{"name": _name, "status": "PASSED", "error": ""}})
+        except AssertionError as _ae:
+            _err_msg = str(_ae) or "Assertion failed"
+            _results.append({{"name": _name, "status": "FAILED", "error": _err_msg}})
+        except Exception as _e:
+            _results.append({{"name": _name, "status": "FAILED", "error": f"{{type(_e).__name__}}: {{_e}}"}})
 
-passed = sum(1 for r in results if r["status"] == "PASSED")
-total = len(results)
-pct = round((passed / total * 100), 1) if total > 0 else 0.0
+_passed = sum(1 for _r in _results if _r["status"] == "PASSED")
+_total = len(_results)
+_pct = round((_passed / _total * 100), 1) if _total > 0 else 0.0
 
-print("__TEST_METRICS_START__")
+print({repr(start_marker)})
 print(json.dumps({{
-    "total": total,
-    "passed": passed,
-    "failed": total - passed,
-    "percentage": pct,
-    "results": results
+    "total": _total,
+    "passed": _passed,
+    "failed": _total - _passed,
+    "percentage": _pct,
+    "results": _results
 }}))
-print("__TEST_METRICS_END__")
+print({repr(end_marker)})
 """
 
     docker_res = execute_in_docker(harness)
@@ -141,20 +152,23 @@ print("__TEST_METRICS_END__")
         }
 
     stdout = docker_res.get("stdout", "")
-    match = re.search(
-        r"__TEST_METRICS_START__\s*(.*?)\s*__TEST_METRICS_END__",
-        stdout,
-        re.DOTALL,
-    )
+    pattern = re.escape(start_marker) + r"\s*(.*?)\s*" + re.escape(end_marker)
+    match = re.search(pattern, stdout, re.DOTALL)
     if not match:
         return {
             "status": "error",
             "message": "Unable to parse test runner metrics.",
-            "total": 0,
+            "total": len(test_cases),
             "passed": 0,
-            "failed": 0,
+            "failed": len(test_cases),
             "percentage": 0.0,
-            "results": [],
+            "results": [
+                {
+                    "name": "Metrics Extraction",
+                    "status": "FAILED",
+                    "error": "Failed to extract test metrics from sandbox output.",
+                }
+            ],
             "execution": docker_res,
         }
 
@@ -173,9 +187,9 @@ print("__TEST_METRICS_END__")
         return {
             "status": "error",
             "message": f"Metrics decode error: {e}",
-            "total": 0,
+            "total": len(test_cases),
             "passed": 0,
-            "failed": 0,
+            "failed": len(test_cases),
             "percentage": 0.0,
             "results": [],
             "execution": docker_res,

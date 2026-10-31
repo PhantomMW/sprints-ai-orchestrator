@@ -110,12 +110,25 @@ def assess_python_code(
 
     try:
         feedback = assessor.invoke(prompt)
+        grading_dict = feedback.model_dump()
+
+        # Programmatic guardrail: failing test assertions prevent pass_status=True
+        if test_metrics.get("failed", 0) > 0 or test_metrics.get("status") != "success":
+            grading_dict["pass_status"] = False
+            grading_dict["score"] = min(grading_dict.get("score", 0), 50)
+            failing_names = [
+                r["name"] for r in test_metrics.get("results", []) if r.get("status") == "FAILED"
+            ]
+            if failing_names:
+                grading_dict["feedback_points"].append(
+                    f"Automated test runner failed on: {', '.join(failing_names)}"
+                )
 
         return {
             "status": "success",
             "execution": execution_result,
             "test_runner": test_metrics,
-            "grading": feedback.model_dump(),
+            "grading": grading_dict,
         }
 
     except Exception as error:

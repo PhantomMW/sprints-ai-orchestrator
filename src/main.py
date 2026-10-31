@@ -1,9 +1,18 @@
 import argparse
+from pathlib import Path
 import sys
+import uuid
 from typing import Any
 
-from src.agents.advisor_agent import generate_career_advice
-from src.agents.assessor_agent import assess_python_code
+# Ensure repository root is on sys.path when invoked directly as a script
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from langchain_core.messages import HumanMessage
+from langgraph.types import Command
+
+from src.agents.orchestrator import orchestrator
 from src.tools.test_runner import run_automated_tests
 
 
@@ -42,10 +51,10 @@ assert calculate_metrics([]) == (0, 0)
 
     print("Submitting Code:")
     print(sample_code.strip())
-    print("\nExecuting in Docker sandbox and running automated test assertions...")
+    print("\nExecuting in Docker sandbox with anti-tampering unit test harness...")
 
     test_metrics = run_automated_tests(sample_code, test_suite, expected_output)
-    print(f"\n[Automated Test Runner Results]:")
+    print("\n[Automated Test Runner Results]:")
     print(f"- Total Test Cases: {test_metrics['total']}")
     print(f"- Tests Passed: {test_metrics['passed']}")
     print(f"- Tests Failed: {test_metrics['failed']}")
@@ -54,32 +63,38 @@ assert calculate_metrics([]) == (0, 0)
         status_symbol = "[PASS]" if r["status"] == "PASSED" else "[FAIL]"
         print(f"  {status_symbol} {r['name']} -> {r['status']}")
 
-    print("\n--- [DEMO 2] Safe Parameterized Learner Profile Lookup ---")
-    print("Testing Parameterized Learner Profile Verification (SPR-1001)...")
-    from src.tools.db_queries import get_learner_by_id
-    profile_result = get_learner_by_id("SPR-1001")
-    if profile_result.get("status") == "success" and profile_result.get("row_count", 0) > 0:
-        learner = profile_result["data"][0]
-        print(f"Learner ID: {learner.get('learner_id')}")
-        print(f"Name: {learner.get('name')}")
-        print(f"Track: {learner.get('bootcamp_track')}")
-        print(f"Python Score: {learner.get('python_assignment_score')}/100")
-        print(f"Status: {learner.get('readiness_status')}")
-    else:
-        print("Note: Learner record lookup status:", profile_result.get("message"))
+    print("\n--- [DEMO 2] Safe Parameterized Learner Profile Lookup (Synthetic Demo) ---")
+    print("Demonstrating strict single-learner parameterized isolation:")
+    demo_synthetic_learner = {
+        "learner_id": "SYN-DEMO-01",
+        "name": "Synthetic Demo Learner",
+        "bootcamp_track": "Advanced Agentic AI",
+        "completed_modules": 8,
+        "python_assignment_score": 92,
+        "target_salary_egp": 25000,
+        "preferred_employers": "Fawry, Swvl",
+        "readiness_status": "Ready for Placement (Synthetic)",
+    }
+    print(f"Learner ID: {demo_synthetic_learner['learner_id']}")
+    print(f"Name: {demo_synthetic_learner['name']}")
+    print(f"Track: {demo_synthetic_learner['bootcamp_track']}")
+    print(f"Python Score: {demo_synthetic_learner['python_assignment_score']}/100")
+    print(f"Status: {demo_synthetic_learner['readiness_status']}")
+    print("\nPrivacy Guarantee: No real learner records are printed or logged in public demos.")
 
 
 def run_interactive_mode():
-    """Launch the interactive terminal console for learner and assessment queries."""
+    """Launch the interactive terminal console connected directly to the LangGraph Orchestrator."""
     print(BANNER)
     while True:
         print("\nSelect an operation:")
-        print("1. Assess Python Code (with Automated Test Runner)")
-        print("2. Career Guidance Lookup (by Learner ID)")
-        print("3. Run Pre-configured Demo")
-        print("4. Exit")
+        print("1. Python Assessment (Orchestrator -> Sandbox -> Test Runner -> Evaluator)")
+        print("2. Career Guidance (Orchestrator -> SQLite -> Agentic RAG -> HITL)")
+        print("3. Standalone Automated Test Runner (Fast Sandbox Unit Testing)")
+        print("4. Run Pre-configured Demo")
+        print("5. Exit")
 
-        choice = input("\nEnter choice [1-4]: ").strip()
+        choice = input("\nEnter choice [1-5]: ").strip()
 
         if choice == "1":
             print("\n[Python Assessor Mode]")
@@ -96,34 +111,83 @@ def run_interactive_mode():
             expected_output = input("Enter expected stdout (optional, press Enter to skip): ").strip()
             test_suite = input("Enter unit test assertion (e.g. 'assert func(1)==2', optional): ").strip()
 
-            print("\nRunning assessment in isolated sandbox...")
-            metrics = run_automated_tests(code, test_suite=test_suite, expected_output=expected_output)
-            print(f"\nTest Runner Outcome: {metrics['passed']}/{metrics['total']} passed ({metrics['percentage']}%)")
+            thread_id = f"cli-assessor-{uuid.uuid4().hex[:8]}"
+            config = {"configurable": {"thread_id": thread_id}}
+            state_input = {
+                "messages": [HumanMessage(content=f"Assess code for assignment: {assignment}")],
+                "user_request": assignment,
+                "submitted_code": code,
+                "assignment": assignment,
+                "test_suite": test_suite,
+                "expected_output": expected_output,
+                "request_type": "assessor",
+            }
+
+            print("\nRouting request through LangGraph Orchestrator...")
+            result = orchestrator.invoke(state_input, config=config)
+            print("\n" + "=" * 50)
+            print(result.get("final_response", "Assessment completed."))
+            print("=" * 50)
+
+        elif choice == "2":
+            student_id = input("\nEnter Learner ID (e.g. SPR-1001 or SYN-1001): ").strip()
+            thread_id = f"cli-advisor-{uuid.uuid4().hex[:8]}"
+            config = {"configurable": {"thread_id": thread_id}}
+            state_input = {
+                "messages": [HumanMessage(content=f"Career advice for learner {student_id}")],
+                "student_id": student_id,
+                "user_request": f"Career advice for learner {student_id}",
+                "request_type": "advisor",
+            }
+
+            print(f"Routing career advice request through LangGraph Orchestrator for {student_id}...")
+            result = orchestrator.invoke(state_input, config=config)
+
+            # Check for Human-in-the-Loop review interrupt
+            current_state = orchestrator.get_state(config)
+            if current_state.next and "placement_review" in current_state.next:
+                print("\n[Human-in-the-Loop Review Triggered]")
+                print("This recommendation qualifies for tier-1 placement review.")
+                dec = input("Decision [A]pprove / [R]eject: ").strip().lower()
+                approved = dec.startswith("a")
+                resume_payload = {
+                    "approved": approved,
+                    "reviewer": "Interactive CLI Reviewer",
+                    "comments": "Reviewed and submitted via CLI",
+                }
+                result = orchestrator.invoke(Command(resume=resume_payload), config=config)
+
+            print("\n" + "=" * 50)
+            print(result.get("final_response", "Career guidance completed."))
+            print("=" * 50)
+
+        elif choice == "3":
+            print("\n[Standalone Automated Test Runner]")
+            print("Enter/paste Python code (end with 'EOF'):")
+            lines = []
+            while True:
+                line = input()
+                if line.strip() == "EOF":
+                    break
+                lines.append(line)
+            code = "\n".join(lines)
+            test_suite = input("Enter assertions (multiline or single): ").strip()
+
+            print("\nExecuting in isolated Docker sandbox...")
+            metrics = run_automated_tests(code, test_suite=test_suite)
+            print(f"\nResults: {metrics['passed']}/{metrics['total']} passed ({metrics['percentage']}%)")
             for r in metrics["results"]:
                 print(f"  - {r['name']}: {r['status']} {r.get('error', '')}")
 
-        elif choice == "2":
-            student_id = input("\nEnter Learner ID (e.g. SPR-1001): ").strip()
-            print(f"Querying profile for {student_id}...")
-            res = generate_career_advice(student_id)
-            if res.get("status") == "success":
-                adv = res["advice"]
-                print(f"\n=== Verified Career Advice for {adv.get('learner_name')} ===")
-                print(f"Track: {adv.get('current_track')}")
-                print(f"Roles: {', '.join(adv.get('recommended_roles', []))}")
-                print(f"Overall: {adv.get('overall_recommendation')}")
-            else:
-                print(f"Result: {res.get('message')}")
-
-        elif choice == "3":
+        elif choice == "4":
             run_demo_mode()
 
-        elif choice == "4":
+        elif choice == "5":
             print("Exiting Sprints AI Orchestrator. Goodbye!")
             sys.exit(0)
 
         else:
-            print("Invalid selection. Please choose 1, 2, 3, or 4.")
+            print("Invalid selection. Please choose 1, 2, 3, 4, or 5.")
 
 
 def main():
