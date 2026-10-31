@@ -388,6 +388,11 @@ _passed = sum(1 for _r in _results if _r["status"] == "PASSED")
 _total = len(_results)
 _pct = round((_passed / _total * 100), 1) if _total > 0 else 0.0
 
+# Bounded emitted captured stdout to 32 KiB to prevent container stdout overflow
+_emitted_stdout = _captured_stdout
+if isinstance(_emitted_stdout, str) and len(_emitted_stdout) > 32768:
+    _emitted_stdout = _emitted_stdout[:32768] + "\n... [stdout truncated by test runner]"
+
 # Emit output using safe primitive stdout writer
 _output_json = _safe_json_dumps({{
     "total": _total,
@@ -395,7 +400,7 @@ _output_json = _safe_json_dumps({{
     "failed": _total - _passed,
     "percentage": _pct,
     "results": _results,
-    "captured_stdout": _captured_stdout,
+    "captured_stdout": _emitted_stdout,
     "compilation_error": _compilation_error,
 }})
 
