@@ -67,7 +67,9 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 ### 3.2 Python Assessor Agent
 
-* Accepts Python code and assignment requirements.
+* Accepts Python code, assignment requirements, and optional test assertions (`test_suite`).
+* Runs the **Automated Test Runner** (`src/tools/test_runner.py`) to execute deterministic unit assertions inside Docker sandbox, producing objective pass/fail metrics.
+* Combines deterministic assertion metrics with Gemini qualitative code review (algorithmic efficiency, readability, PEP 8).
 * Executes code inside a restricted Docker container prototype (`sprints-python-sandbox:latest`).
 * Applies strict isolation and resource bounds:
   * Network disabled (`--network none`).
@@ -132,19 +134,20 @@ sprints-ai-orchestrator/
 │   │   ├── advisor_agent.py
 │   │   ├── assessor_agent.py
 │   │   ├── evaluator_optimizer.py
-│   │   └── orchestrator.py
+│   │   └── orchestrator.py      # Supports pluggable persistent checkpointers
 │   │
 │   ├── tools/
+│   │   ├── test_runner.py       # Deterministic unit test runner harness
+│   │   ├── docker_executor.py   # Bounded Docker executor with timeout & output caps
+│   │   ├── db_queries.py        # Safe parameterized domain operations
 │   │   ├── rag_retriever.py
 │   │   ├── code_repl.py
-│   │   ├── docker_executor.py   # Bounded Docker executor with timeout & output caps
-│   │   ├── db_queries.py        # Privacy-hardened SQLite query tool
 │   │   ├── document_loader.py
 │   │   └── audio_transcriber.py
 │   │
 │   ├── state.py
 │   ├── llm.py
-│   └── main.py
+│   └── main.py                  # Interactive CLI and demonstration interface
 │
 ├── docs/
 │   ├── DEMO_SCRIPT.md
@@ -156,10 +159,12 @@ sprints-ai-orchestrator/
 │   ├── test_agents/
 │   │   ├── test_agentic_rag.py
 │   │   ├── test_evaluator_optimizer.py
-│   │   └── test_orchestrator_evaluator.py
+│   │   ├── test_orchestrator_evaluator.py
+│   │   └── test_assessor_agent.py
 │   │
 │   └── test_tools/
-│       ├── test_db_queries.py      # SQLite privacy, row bounding & security tests
+│       ├── test_db_queries.py      # Synthetic isolated database fixture tests
+│       ├── test_test_runner.py     # Deterministic unit test runner tests
 │       └── test_docker_executor.py # Docker runtime, timeout, truncation & isolation tests
 │
 ├── pytest.ini                   # Pytest configuration and path discovery
@@ -228,6 +233,20 @@ docker build -t sprints-python-sandbox:latest -f sandbox/Dockerfile .
 
 Ensure Docker Desktop is running before using the Python Assessor.
 
+### Running the Interactive CLI
+
+Launch the interactive terminal interface:
+
+```bash
+python src/main.py --mode interactive
+```
+
+Or run the automated demonstration:
+
+```bash
+python src/main.py --mode demo
+```
+
 ## 7. Running the Tests
 
 Run the complete test suite (agent workflows, database query privacy, and Docker runtime):
@@ -243,9 +262,10 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **34 passing tests** covering:
-* **Agent Workflows (9 tests):** Agentic RAG retries, evaluator-optimizer bounds, routing, and Human-in-the-Loop interrupt/resume cycles.
-* **Database Privacy & Tools (11 tests):** Bounded 5-row limits, column allowlisting, non-SELECT rejection, multi-statement blocking, SQL comment prevention, system table protection, and parameterized single-learner isolation.
+The comprehensive test suite currently consists of **45 passing tests** (100% pass rate) covering:
+* **Agent Workflows & Assessment (11 tests):** Agentic RAG retries, evaluator-optimizer bounds, routing, Human-in-the-Loop interrupt/resume cycles, and Assessor Agent deterministic test runner integration.
+* **Database Privacy & Domain Operations (14 tests):** Safe parameterized single-learner lookups, track searches, aggregate metrics, row bounding (5 max), column allowlisting, SQL comment and system table blocking, verified with an isolated synthetic database fixture.
+* **Automated Test Runner (6 tests):** Test case parsing, deterministic assertion evaluation, pass percentage calculations, expected stdout matching, and compilation failure capture.
 * **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.

@@ -155,6 +155,10 @@ class AgentState(TypedDict, total=False):
 
     expected_output: str
 
+    test_suite: str
+
+    test_runner: dict[str, Any]
+
     grading_result: dict[str, Any]
 
     # --------------------------------------------------

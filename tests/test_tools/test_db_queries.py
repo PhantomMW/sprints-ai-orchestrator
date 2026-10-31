@@ -1,12 +1,56 @@
+import sqlite3
 import pytest
 
 from src.tools.db_queries import (
     ALLOWED_COLUMNS,
     MAX_QUERY_ROWS,
     get_learner_by_id,
+    get_learner_by_id_tool,
+    get_track_aggregate_stats,
     learner_sql_tool,
     query_learner_database,
+    search_learners_by_track,
 )
+
+
+@pytest.fixture(autouse=True)
+def setup_test_db(tmp_path, monkeypatch):
+    """
+    Provide an isolated synthetic SQLite database for tests.
+    Ensures zero reliance on uncommitted production data and 100% CI reproducibility.
+    """
+    test_db = tmp_path / "test_sprints_learners.sqlite3"
+    with sqlite3.connect(test_db) as conn:
+        conn.execute("""
+            CREATE TABLE learners (
+                learner_id TEXT PRIMARY KEY,
+                name TEXT,
+                bootcamp_track TEXT,
+                completed_modules INTEGER,
+                python_assignment_score INTEGER,
+                target_salary_egp INTEGER,
+                preferred_employers TEXT,
+                readiness_status TEXT
+            )
+        """)
+        for i in range(1, 15):
+            conn.execute(
+                """
+                INSERT INTO learners VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"SPR-{1000 + i}",
+                    f"Synthetic Learner {i}",
+                    "Advanced Agentic AI" if i % 2 == 0 else "Python Data Science",
+                    i,
+                    70 + (i * 2),
+                    20000 + (i * 1000),
+                    "Fawry, Swvl" if i % 2 == 0 else "Vodafone",
+                    "Ready for Placement" if i > 5 else "In Progress",
+                ),
+            )
+    monkeypatch.setattr("src.tools.db_queries.DB_PATH", test_db)
+    yield test_db
 
 
 def test_query_learner_database_enforces_row_limit():
@@ -78,16 +122,12 @@ def test_query_learner_database_blocks_unauthorized_tables():
 
 def test_get_learner_by_id_returns_targeted_learner_only():
     """Verify that get_learner_by_id returns exactly one learner without cross-learner exposure."""
-    # First get an existing ID
-    preview = query_learner_database("SELECT learner_id FROM learners")
-    target_id = preview["data"][0]["learner_id"]
-
-    result = get_learner_by_id(target_id)
+    result = get_learner_by_id("SPR-1002")
     assert result["status"] == "success"
     assert result["row_count"] == 1
     assert len(result["data"]) == 1
     learner = result["data"][0]
-    assert learner["learner_id"] == target_id
+    assert learner["learner_id"] == "SPR-1002"
     assert set(learner.keys()).issubset(ALLOWED_COLUMNS)
 
 
@@ -114,3 +154,28 @@ def test_learner_sql_tool_invokes_query_learner_database():
     assert res["status"] == "success"
     assert res["row_count"] == MAX_QUERY_ROWS
     assert res["truncated"] is True
+
+
+def test_search_learners_by_track():
+    """Verify parameterized domain lookup by track."""
+    res = search_learners_by_track("Advanced Agentic AI", limit=3)
+    assert res["status"] == "success"
+    assert res["row_count"] == 3
+    for row in res["data"]:
+        assert row["bootcamp_track"] == "Advanced Agentic AI"
+
+
+def test_get_track_aggregate_stats():
+    """Verify safe aggregate metrics computation."""
+    res = get_track_aggregate_stats()
+    assert res["status"] == "success"
+    assert res["data"]["learner_count"] == 14
+    assert res["data"]["avg_python_score"] > 0
+
+
+def test_get_learner_by_id_tool():
+    """Verify the parameterized tool wrapper for learner lookup."""
+    res = get_learner_by_id_tool.invoke({"student_id": "SPR-1001"})
+    assert res["status"] == "success"
+    assert res["row_count"] == 1
+    assert res["data"][0]["name"] == "Synthetic Learner 1"

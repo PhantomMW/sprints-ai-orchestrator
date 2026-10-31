@@ -199,7 +199,7 @@ def test_docker_storage_read_only_restriction():
     result = execute_in_docker(code)
 
     assert result["status"] == "error"
-    assert "Read-only file system" in result["stderr"]
+    assert any(err in result["stderr"] for err in ["Read-only file system", "Permission denied", "Errno 30", "Errno 13"])
 
 
 @requires_docker

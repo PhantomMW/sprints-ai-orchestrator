@@ -107,6 +107,7 @@ def assessor_node(state: AgentState) -> dict:
     code = state.get("submitted_code", "")
     assignment = state.get("assignment", "")
     expected_output = state.get("expected_output", "")
+    test_suite = state.get("test_suite", "")
 
     if not code.strip() or not assignment.strip():
         response = (
@@ -124,6 +125,7 @@ def assessor_node(state: AgentState) -> dict:
         code=code,
         assignment=assignment,
         expected_output=expected_output,
+        test_suite=test_suite,
     )
 
     if result.get("status") != "success":
@@ -431,9 +433,12 @@ def placement_review_node(state: AgentState) -> dict:
     }
 
 
-def build_orchestrator():
+def build_orchestrator(checkpointer=None):
     """
     Build and compile the Sprints LangGraph orchestrator.
+
+    Supports pluggable persistent checkpointers (e.g., PostgresSaver, SqliteSaver)
+    for production persistence across restarts, defaulting to in-memory MemorySaver.
 
     Features:
         - Centralized request routing.
@@ -497,9 +502,9 @@ def build_orchestrator():
     workflow.add_edge("placement_review", END)
     workflow.add_edge("error", END)
 
-    memory = MemorySaver()
+    saver = checkpointer if checkpointer is not None else MemorySaver()
 
-    return workflow.compile(checkpointer=memory)
+    return workflow.compile(checkpointer=saver)
 
 
 # Compiled graph instance
