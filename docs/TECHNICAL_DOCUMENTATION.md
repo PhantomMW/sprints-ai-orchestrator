@@ -1029,31 +1029,33 @@ Automated tests should use mocks and should not require a live API key.
 
 ## 14. Testing
 
-The test suite contains **98 automated tests** across 12 test suites spanning agent workflows, domain tools, logging, and sandbox execution (97 passing in CI, 1 skipped when live Gemini API key is absent):
+The test suite contains **112 automated tests** across 13 test suites spanning agent workflows, domain tools, logging, invariant verification, and sandbox execution (111 passing in CI on Ubuntu with Docker, 1 skipped when live Gemini API key is absent):
 
 - `tests/test_agents/test_agentic_rag.py` (5 tests): validates Agentic RAG multi-track curriculum coverage, quality scoring, source trust prioritization, out-of-domain detection, and sufficiency retry convergence.
 
 - `tests/test_agents/test_assessor_agent.py` (4 tests): validates single-pass automated unit test runner integration, execution failure handling, fail-closed runner crash abortion, and deterministic assertion failure score capping.
 
-- `tests/test_agents/test_evaluator_optimizer.py` (2 tests): validates optimization iteration limits and convergence thresholds.
+- `tests/test_agents/test_evaluator_optimizer.py` (6 tests): validates optimization iteration limits, convergence thresholds, invariant extraction (`extract_critical_invariants`), fact-preservation verification (`verify_fact_preservation`), mutation detection (dropped student IDs, altered scores, track substitutions), and programmatic rejection of corrupted candidates with automatic fallback.
 
-- `tests/test_agents/test_orchestrator_evaluator.py` (9 tests): validates LangGraph routing, assessment evaluator routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC-SHA256 reviewer token verification, signature tampering rejection, anti-replay defense, and cryptographic caller token injection in advisor node.
+- `tests/test_agents/test_orchestrator_evaluator.py` (10 tests): validates LangGraph routing, assessment evaluator routing, Human-in-the-Loop interrupt/resume cycles, cryptographic HMAC-SHA256 reviewer token verification, signature tampering rejection, anti-replay defense, cryptographic caller token injection in advisor node, and strict advisor self-issuance rejection in production.
 
 - `tests/test_agents/test_e2e_integration.py` (2 tests): validates complete end-to-end multi-agent lifecycle traversing signed caller token DB lookups, RAG retrieval, Evaluator-Optimizer loop, conditional HITL review interrupt, human reviewer PBKDF2 authentication, token issuance, and state resumption across restart.
 
 - `tests/test_agents/test_live_gemini_integration.py` (1 test): validates live Google Gemini API connectivity and structured generation when live credentials are provided.
 
-- `tests/test_tools/test_auth.py` (8 tests): validates PBKDF2-HMAC-SHA256 password hashing with salt, reviewer authentication, shared SQLite brute-force login rate limiting (5 attempts / 15 min), concurrent nonce race condition atomicity, persistent SQLite anti-replay store with fail-closed behavior in production, production secret enforcement, and database caller tokens.
+- `tests/test_tools/test_auth.py` (11 tests): validates PBKDF2-HMAC-SHA256 password hashing with salt, reviewer authentication, shared SQLite brute-force login rate limiting (5 attempts / 15 min), concurrent nonce race condition atomicity, persistent SQLite anti-replay store with fail-closed behavior in production, cryptographic key separation between DB caller secrets (`DB_CALLER_AUTH_SECRET`) and HITL reviewer secrets (`HITL_AUTH_SECRET`), cross-token verification rejection, and JSON external directory configuration.
 
 - `tests/test_tools/test_db_queries.py` (20 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), cryptographic caller token authorization (`auth_token`), production token enforcement, aggregate query caller authorization, and k-anonymity cohort suppression (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage.
 
-- `tests/test_tools/test_test_runner.py` (20 tests): validates Master-Worker process isolation (parent harness process never executes untrusted code), concurrent non-blocking select-driven IPC draining loop eliminating OS pipe buffer deadlocks on payloads > 64 KiB, bounded 512 KiB worker IPC payload, test case parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` trapping, delimiter spoofing defense, and 7 dedicated adversarial/IPC tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` child trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, ctypes neutralization, and large payload non-deadlocking IPC verification).
+- `tests/test_tools/test_test_runner.py` (22 tests): validates Master-Worker process isolation (parent harness process never executes untrusted code), concurrent non-blocking select-driven IPC draining loop eliminating OS pipe buffer deadlocks on payloads > 64 KiB, bounded 512 KiB worker IPC payload with explicit SIGKILL worker termination and clean reaping, 64 KiB child assertion bounding, test case parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` trapping, delimiter spoofing defense, and 9 dedicated adversarial/IPC tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` child trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, ctypes neutralization, large payload non-deadlocking IPC verification, and payload overflow SIGKILL handling).
 
-- `tests/test_tools/test_sqlite_checkpoint.py` (11 tests): validates cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, coordinate-bound signature verification preventing cut-and-paste thread swapping, production secret key enforcement, fail-closed anti-downgrade integrity protection (`CheckpointSecurityError`), and retention policy purging (`purge_old_checkpoints`).
+- `tests/test_tools/test_sqlite_checkpoint.py` (12 tests): validates cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, coordinate-bound signature verification preventing cut-and-paste thread swapping, production secret key enforcement, fail-closed anti-downgrade integrity protection (`CheckpointSecurityError`), retention policy purging (`purge_old_checkpoints`), and `SafeCheckpointUnpickler` blocking dangerous RCE gadget modules (`os`, `subprocess`, `sys`, `ctypes`, `eval`).
+
+- `tests/test_tools/test_rag_benchmark.py` (1 test): validates quantitative RAG retrieval benchmarks enforcing Precision @ 3 >= 0.80, Domain Recall = 100%, Groundedness Ratio = 100%, and sub-second retrieval latency (< 1000ms).
 
 - `tests/test_tools/test_logger.py` (2 tests): validates structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 
-- `tests/test_tools/test_docker_executor.py` (14 tests): validates pinned immutable base image digest (`python:3.10-slim@sha256:6ff50646...`), bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
+- `tests/test_tools/test_docker_executor.py` (16 tests): validates pinned immutable base image digest (`python:3.10-slim@sha256:6ff50646...`), configurable gVisor (`runsc`) and Kata Containers MicroVM support (`SPRINTS_DOCKER_RUNTIME`), runtime inspection (`get_sandbox_containment_mode`), bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Run the complete test suite:
 
@@ -1148,7 +1150,7 @@ Continuous Integration is automated via GitHub Actions (`.github/workflows/tests
 
                           tool test suite         integration benchmarks
 
-                          (98 tests: 97 passed, 1 skipped in CI)
+                          (112 tests: 111 passed in CI, 1 skipped)
 
 
 
@@ -1186,7 +1188,7 @@ approval checkpoint.
 
 The project has a working prototype structure and an extensive passing
 
-test suite (98 automated tests across 12 suites). Its architecture incorporates Master-Worker process isolation,
+test suite (112 automated tests across 13 suites). Its architecture incorporates Master-Worker process isolation,
 
 durable SQLite checkpointing with Fernet AES-128-CBC encryption at rest and coordinate-bound HMAC signatures, PBKDF2 reviewer authentication with brute-force rate limiting, persistent anti-replay nonce storage, and k-anonymity cohort protection. Its current prototype boundaries include the limited project-context
 

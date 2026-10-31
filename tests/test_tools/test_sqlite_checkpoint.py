@@ -378,3 +378,18 @@ def test_sqlite_checkpoint_anti_downgrade_in_production(tmp_path, monkeypatch):
     with pytest.raises(CheckpointSecurityError) as excinfo:
         saver._encrypt(b"secret-payload")
     assert "encryption at rest is mandatory in production" in str(excinfo.value).lower()
+
+def test_safe_checkpoint_unpickler_blocks_dangerous_gadgets():
+    """Verify that Restricted SafeCheckpointUnpickler blocks remote code execution payloads."""
+    import pickle
+    from src.tools.sqlite_checkpoint import safe_checkpoint_loads, CheckpointSecurityError
+
+    class Exploit:
+        def __reduce__(self):
+            import os
+            return (os.system, ("echo exploit",))
+
+    malicious_bytes = pickle.dumps(Exploit())
+    with pytest.raises(CheckpointSecurityError) as exc_info:
+        safe_checkpoint_loads(malicious_bytes)
+    assert "dangerous" in str(exc_info.value).lower() or "blocked" in str(exc_info.value).lower()

@@ -338,3 +338,39 @@ def compute():
     assert res["status"] == "success"
     assert res["total"] == 1
     assert res["passed"] == 1
+
+@requires_docker
+def test_worker_payload_exceeding_max_limit_fails_safely():
+    """Verify that worker attempting to emit > 512 KiB IPC payload is terminated with SIGKILL and reported cleanly."""
+    code = """
+import sys
+# Generate 700 KiB of stdout so worker IPC payload exceeds 512 KiB limit
+sys.stdout.write("B" * (700 * 1024))
+def run_test():
+    return True
+"""
+    suite = "assert run_test() is True"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] in ("success", "error")
+    assert res["failed"] >= 1
+    assert any("512 KiB" in str(r.get("error", "")) for r in res.get("results", []))
+
+
+def test_harness_template_includes_512k_overflow_protection():
+    """Verify generated Python harness script includes 512 KiB overflow limit and worker SIGKILL handling."""
+    with patch("src.tools.test_runner.execute_in_docker") as mock_exec:
+        mock_exec.return_value = {
+            "status": "error",
+            "error": "Short-circuit for payload inspection",
+        }
+        run_automated_tests(
+            code="x = 1",
+            test_suite="assert x == 1",
+        )
+        harness_code = mock_exec.call_args[0][0]
+        assert "_w_MAX = 512 * 1024" in harness_code
+        assert "_w_overflow = True" in harness_code
+        assert "_safe_SIGKILL" in harness_code
+        assert "Worker IPC payload exceeded maximum limit of 512 KiB" in harness_code
+        assert "_c_overflow = True" in harness_code
+        assert "Assertion IPC payload exceeded limit of 64 KiB" in harness_code

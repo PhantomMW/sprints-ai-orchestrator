@@ -83,7 +83,18 @@ def create_query_reformulator():
 
 def get_learner_profile(student_id: str, caller_token: str | None = None) -> dict[str, Any]:
     """Retrieve a learner profile from SQLite using authorized cryptographic caller tokens."""
-    token = caller_token or generate_caller_token("career_advisor_service", "advisor")
+    import os
+    app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+    if not caller_token:
+        if app_env in ("production", "prod", "staging"):
+            return {
+                "status": "error",
+                "message": "Authorization failure: Caller token is mandatory in production environment. Advisor self-issuance is strictly disallowed.",
+                "learner_profile": None,
+            }
+        token = generate_caller_token("career_advisor_dev_fallback", "advisor")
+    else:
+        token = caller_token
     return get_learner_by_id(student_id, auth_token=token)
 
 
@@ -363,7 +374,17 @@ def generate_career_advice(
     """
 
     # 1. Retrieve learner profile using authenticated caller token.
-    token = caller_token or generate_caller_token("career_advisor_service", "advisor")
+    import os
+    app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+    if not caller_token and app_env in ("production", "prod", "staging"):
+        return {
+            "status": "error",
+            "message": "Authorization failure: Cryptographic caller token must be provided by the trusted orchestration layer in production. Self-issuance is forbidden.",
+            "student_id": student_id,
+            "learner_profile": None,
+            "advice": None,
+        }
+    token = caller_token or generate_caller_token("career_advisor_dev_fallback", "advisor")
     profile_result = get_learner_profile(student_id, caller_token=token)
 
     if profile_result.get("status") != "success":

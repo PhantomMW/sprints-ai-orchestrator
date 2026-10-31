@@ -210,3 +210,45 @@ def test_docker_network_isolation():
 
     assert result["status"] == "error"
     assert any(err in result["stderr"] for err in ["Network is unreachable", "Errno 101", "TimeoutError", "OSError"])
+
+def test_sandbox_containment_mode_defaults_and_overrides(monkeypatch):
+    """Verify inspection function reports correct containment mode for runc, gVisor, and Kata."""
+    from src.tools.docker_executor import get_sandbox_containment_mode
+
+    # Default runc mode
+    monkeypatch.delenv("SPRINTS_DOCKER_RUNTIME", raising=False)
+    info_default = get_sandbox_containment_mode()
+    assert info_default["containment_mode"] == "container_runc"
+    assert info_default["is_microvm"] is False
+
+    # gVisor (runsc) MicroVM mode
+    monkeypatch.setenv("SPRINTS_DOCKER_RUNTIME", "runsc")
+    info_gvisor = get_sandbox_containment_mode()
+    assert info_gvisor["containment_mode"] == "microvm_gvisor"
+    assert info_gvisor["is_microvm"] is True
+    assert "gVisor" in info_gvisor["description"]
+
+    # Kata MicroVM mode
+    monkeypatch.setenv("SPRINTS_DOCKER_RUNTIME", "kata-qemu")
+    info_kata = get_sandbox_containment_mode()
+    assert info_kata["containment_mode"] == "microvm_kata"
+    assert info_kata["is_microvm"] is True
+
+
+def test_docker_command_includes_runtime_flag_when_configured(monkeypatch):
+    """Verify execute_in_docker passes --runtime when SPRINTS_DOCKER_RUNTIME is set."""
+    monkeypatch.setenv("SPRINTS_DOCKER_RUNTIME", "runsc")
+    with patch("src.tools.docker_executor.subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdout = BytesIO(b"")
+        mock_proc.stderr = BytesIO(b"")
+        mock_proc.wait.return_value = 0
+        mock_proc.poll.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        execute_in_docker("print('test')")
+        cmd_called = mock_popen.call_args[0][0]
+        assert "--runtime" in cmd_called
+        idx = cmd_called.index("--runtime")
+        assert cmd_called[idx + 1] == "runsc"

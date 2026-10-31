@@ -403,6 +403,7 @@ def test_advisor_node_passes_caller_token_in_production(tmp_path, monkeypatch):
     import sqlite3
     monkeypatch.setenv("SPRINTS_ENV", "production")
     monkeypatch.setenv("HITL_AUTH_SECRET", "prod-secret-for-advisor-token-test-123456789")
+    monkeypatch.setenv("DB_CALLER_AUTH_SECRET", "prod-db-caller-secret-for-advisor-test-123456789")
 
     test_db = tmp_path / "prod_learners.sqlite3"
     with sqlite3.connect(test_db) as conn:
@@ -443,3 +444,18 @@ def test_advisor_node_passes_caller_token_in_production(tmp_path, monkeypatch):
             assert res["career_advice"]["status"] == "success"
             assert res["career_advice"]["student_id"] == "SPR-PROD-01"
             assert res["career_advice"]["learner_profile"]["name"] == "Production Learner"
+
+
+def test_advisor_agent_direct_call_without_token_rejected_in_production(monkeypatch):
+    """Verify that calling advisor_agent directly without a caller token in production is strictly rejected."""
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.setenv("DB_CALLER_AUTH_SECRET", "prod-db-caller-secret-for-advisor-test-123456789")
+
+    from src.agents.advisor_agent import generate_career_advice, get_learner_profile
+    res = generate_career_advice("SPR-PROD-01", caller_token=None)
+    assert res["status"] == "error"
+    assert "caller token must be provided by the trusted orchestration layer" in res["message"].lower()
+
+    profile_res = get_learner_profile("SPR-PROD-01", caller_token=None)
+    assert profile_res["status"] == "error"
+    assert "caller token is mandatory" in profile_res["message"].lower()

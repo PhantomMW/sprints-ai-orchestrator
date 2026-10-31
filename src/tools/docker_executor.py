@@ -10,6 +10,44 @@ import os
 DEFAULT_SANDBOX_IMAGE = "sprints-python-sandbox:latest"
 SANDBOX_IMAGE = os.getenv("SPRINTS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
 PINNED_BASE_IMAGE = os.getenv("SPRINTS_BASE_IMAGE", "python:3.10-slim")
+DOCKER_RUNTIME = os.getenv("SPRINTS_DOCKER_RUNTIME", "").strip()
+
+
+def get_sandbox_containment_mode() -> dict[str, Any]:
+    """
+    Inspect and return the configured sandbox isolation level and container runtime.
+    
+    Supports:
+        - gVisor (runsc): User-space kernel intercepting all untrusted syscalls.
+        - Kata Containers (kata / kata-qemu): Lightweight hardware-assisted MicroVMs.
+        - Standard Linux Container (runc): Standard cgroups/namespaces isolation.
+    """
+    runtime = os.getenv("SPRINTS_DOCKER_RUNTIME", DOCKER_RUNTIME).strip()
+    if runtime in ("runsc", "gvisor"):
+        mode = "microvm_gvisor"
+        desc = "gVisor user-space kernel sandbox (runsc) providing multi-tenant syscall interception"
+    elif "kata" in runtime:
+        mode = "microvm_kata"
+        desc = "Kata Containers lightweight hardware-assisted virtual machine isolation"
+    elif runtime:
+        mode = f"custom_{runtime}"
+        desc = f"Custom OCI container runtime ({runtime})"
+    else:
+        mode = "container_runc"
+        desc = "Standard Linux cgroups/namespaces container isolation (runc)"
+
+    return {
+        "runtime": runtime or "runc",
+        "containment_mode": mode,
+        "is_microvm": mode in ("microvm_gvisor", "microvm_kata"),
+        "description": desc,
+        "network_isolated": True,
+        "read_only_rootfs": True,
+        "memory_limit": MEMORY_LIMIT,
+        "cpu_limit": CPU_LIMIT,
+        "pid_limit": PID_LIMIT,
+        "base_image": PINNED_BASE_IMAGE,
+    }
 
 EXECUTION_TIMEOUT = 5
 
@@ -81,12 +119,18 @@ def execute_in_docker(code: str) -> dict[str, Any]:
 
     container_name = f"sprints-assessment-{uuid.uuid4().hex[:12]}"
 
+    active_runtime = os.getenv("SPRINTS_DOCKER_RUNTIME", DOCKER_RUNTIME).strip()
     command = [
         "docker",
         "run",
         "--rm",
         "--name",
         container_name,
+    ]
+    if active_runtime:
+        command.extend(["--runtime", active_runtime])
+
+    command.extend([
         "--network",
         "none",
         "--read-only",
@@ -109,7 +153,7 @@ def execute_in_docker(code: str) -> dict[str, Any]:
         "python",
         "-I",
         "-B",
-    ]
+    ])
 
     process = None
     stdout_result: list[tuple[bytes, bool]] = []

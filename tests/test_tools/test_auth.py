@@ -150,3 +150,67 @@ def test_nonce_store_fail_closed_in_production(tmp_path, monkeypatch):
     with pytest.raises(SecurityConfigurationError) as excinfo:
         store.consume("test-nonce-fail-closed", "reviewer_fail", 9999999999.0)
     assert "in-memory fallback is disabled in production" in str(excinfo.value).lower()
+
+
+def test_auth_db_caller_secret_guard(monkeypatch):
+    """Verify that production environments enforce dedicated DB_CALLER_AUTH_SECRET."""
+    from src.utils.auth import get_db_secret, DEFAULT_DB_SECRET, DEFAULT_HITL_SECRET
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.delenv("DB_CALLER_AUTH_SECRET", raising=False)
+    monkeypatch.delenv("SPRINTS_DB_SECRET", raising=False)
+
+    with pytest.raises(SecurityConfigurationError) as excinfo:
+        get_db_secret()
+    assert "DB_CALLER_AUTH_SECRET environment variable is mandatory" in str(excinfo.value)
+
+    # Rejection of default secret
+    monkeypatch.setenv("DB_CALLER_AUTH_SECRET", DEFAULT_DB_SECRET)
+    with pytest.raises(SecurityConfigurationError) as excinfo2:
+        get_db_secret()
+    assert "Insecure default or shared" in str(excinfo2.value)
+
+    # Rejection of shared HITL secret (enforcing cryptographic key isolation)
+    monkeypatch.setenv("DB_CALLER_AUTH_SECRET", DEFAULT_HITL_SECRET)
+    with pytest.raises(SecurityConfigurationError) as excinfo3:
+        get_db_secret()
+    assert "Insecure default or shared" in str(excinfo3.value)
+
+
+def test_auth_key_separation_cross_token_verification_fails():
+    """Verify that database caller tokens cannot be forged or verified with HITL keys."""
+    db_secret = "db-caller-unique-secret-key-999888777"
+    hitl_secret = "hitl-reviewer-unique-secret-key-111222333"
+
+    # Generate token using dedicated DB secret
+    token = generate_caller_token("advisor_node", "advisor", secret=db_secret)
+
+    # Valid when verified with correct DB secret
+    valid_db, _, _ = verify_caller_token(token, secret=db_secret)
+    assert valid_db is True
+
+    # MUST fail when verified with HITL secret (proving cryptographic key isolation)
+    invalid_hitl, err, _ = verify_caller_token(token, secret=hitl_secret)
+    assert invalid_hitl is False
+    assert "mismatch" in err.lower()
+
+
+def test_auth_external_reviewers_json_configuration(monkeypatch):
+    """Verify that institutional reviewer directories can be injected via SPRINTS_REVIEWERS_JSON."""
+    import json
+    from src.utils.auth import get_registered_reviewers, authenticate_reviewer, hash_password
+
+    custom_reviewers = {
+        "external_director": {
+            "role": "placement_director",
+            "password_hash": hash_password("EnterpriseSecure2026!"),
+        }
+    }
+    monkeypatch.setenv("SPRINTS_REVIEWERS_JSON", json.dumps(custom_reviewers))
+
+    reviewers = get_registered_reviewers()
+    assert "external_director" in reviewers
+
+    # Authenticate external reviewer
+    ok, msg, info = authenticate_reviewer("external_director", "EnterpriseSecure2026!")
+    assert ok is True
+    assert info["role"] == "placement_director"

@@ -59,6 +59,36 @@ def get_hitl_secret() -> str:
     return secret or DEFAULT_HITL_SECRET
 
 
+DEFAULT_DB_SECRET = "sprints-db-caller-secure-authorization-secret-2026"
+
+
+def get_db_secret() -> str:
+    """
+    Retrieve the cryptographic signing key for database caller authorization tokens.
+    
+    Security Guarantee:
+        Enforces cryptographic key separation between database caller tokens and
+        human reviewer HITL session tokens. In production/staging, DB_CALLER_AUTH_SECRET
+        is mandatory and cannot match DEFAULT_DB_SECRET or DEFAULT_HITL_SECRET.
+    """
+    secret = os.getenv("DB_CALLER_AUTH_SECRET", os.getenv("SPRINTS_DB_SECRET"))
+    app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+
+    if app_env in ("production", "prod", "staging"):
+        if not secret:
+            raise SecurityConfigurationError(
+                "FATAL: DB_CALLER_AUTH_SECRET environment variable is mandatory in production/staging environments. "
+                "Default development keys are strictly disallowed."
+            )
+        if secret in (DEFAULT_DB_SECRET, DEFAULT_HITL_SECRET):
+            raise SecurityConfigurationError(
+                "FATAL: Insecure default or shared DB_CALLER_AUTH_SECRET detected in production. "
+                "Database caller tokens must use a dedicated, unique cryptographic secret key."
+            )
+
+    return secret or DEFAULT_DB_SECRET
+
+
 class PersistentNonceStore:
     """
     Persistent, process-safe, multi-worker anti-replay nonce store backed by SQLite.
@@ -329,7 +359,7 @@ def get_registered_reviewers() -> dict[str, dict[str, str]]:
     In production environments, using default accounts requires explicit opt-in
     via SPRINTS_ENABLE_DEMO_REVIEWERS=true or custom SPRINTS_REVIEWERS_CONFIG.
     """
-    config_env = os.getenv("SPRINTS_REVIEWERS_CONFIG")
+    config_env = os.getenv("SPRINTS_REVIEWERS_CONFIG") or os.getenv("SPRINTS_REVIEWERS_JSON")
     if config_env:
         try:
             parsed = json.loads(config_env)
@@ -592,7 +622,7 @@ def generate_caller_token(
     secret: str | None = None,
 ) -> str:
     """Generate an HMAC-SHA256 signed caller token for authorized database queries."""
-    key = (secret or get_hitl_secret()).encode("utf-8")
+    key = (secret or get_db_secret()).encode("utf-8")
     now = int(time.time())
     payload = {
         "caller_id": caller_id.strip(),
@@ -621,7 +651,7 @@ def verify_caller_token(
 
     b64_payload, signature = parts
     try:
-        key = (secret or get_hitl_secret()).encode("utf-8")
+        key = (secret or get_db_secret()).encode("utf-8")
     except SecurityConfigurationError as sce:
         return False, str(sce), {}
 

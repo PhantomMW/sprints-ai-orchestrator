@@ -25,6 +25,43 @@ from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMet
 from langgraph.checkpoint.memory import InMemorySaver
 
 
+import io
+
+
+class SafeCheckpointUnpickler(pickle.Unpickler):
+    """
+    Restricted Unpickler that blocks arbitrary remote code execution gadgets.
+    Guarantees that state deserialization only reconstructs safe application structures
+    and primitives, preventing malicious deserialization attacks (e.g. os.system, subprocess).
+    """
+
+    BLOCKED_MODULES = {
+        "os", "posix", "nt", "subprocess", "sys", "shutil",
+        "socket", "pty", "commands", "ctypes", "builtins.eval", "builtins.exec"
+    }
+
+    def find_class(self, module: str, name: str) -> Any:
+        # Check blocked module names and prefixes
+        if module in self.BLOCKED_MODULES or module.startswith(("os.", "subprocess.", "sys.")):
+            raise CheckpointSecurityError(
+                f"Security violation: Deserialization of dangerous module '{module}.{name}' is blocked."
+            )
+
+        if module == "builtins" and name in ("eval", "exec", "compile", "open", "__import__", "getattr", "setattr"):
+            raise CheckpointSecurityError(
+                f"Security violation: Deserialization of dangerous builtin '{name}' is blocked."
+            )
+
+        return super().find_class(module, name)
+
+
+def safe_checkpoint_loads(data: bytes) -> Any:
+    """Safely load pickled checkpoint data using the restricted unpickler."""
+    if not isinstance(data, (bytes, bytearray)):
+        raise CheckpointSecurityError("Invalid checkpoint payload: expected bytes.")
+    return SafeCheckpointUnpickler(io.BytesIO(data)).load()
+
+
 class SqliteSaver(InMemorySaver):
     """
     A persistent SQLite-backed checkpointer for LangGraph workflows with
@@ -148,6 +185,10 @@ class SqliteSaver(InMemorySaver):
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
+                b_cols = [r[1] for r in conn.execute("PRAGMA table_info(blobs)").fetchall()]
+                if b_cols and "blob_key" not in b_cols:
+                    conn.execute("DROP TABLE blobs")
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS blobs (
                         blob_key BLOB PRIMARY KEY,
@@ -155,6 +196,10 @@ class SqliteSaver(InMemorySaver):
                         signature TEXT
                     )
                 """)
+
+                w_cols = [r[1] for r in conn.execute("PRAGMA table_info(writes)").fetchall()]
+                if w_cols and "write_key" not in w_cols:
+                    conn.execute("DROP TABLE writes")
                 try:
                     conn.execute("ALTER TABLE blobs ADD COLUMN signature TEXT")
                 except sqlite3.OperationalError:
@@ -189,22 +234,22 @@ class SqliteSaver(InMemorySaver):
                         raise SecurityError(
                             f"Integrity check failed for checkpoint {t_id}/{cp_id}: signature mismatch."
                         )
-                    self.storage[t_id][ns][cp_id] = pickle.loads(self._decrypt(cp_data))
+                    self.storage[t_id][ns][cp_id] = safe_checkpoint_loads(self._decrypt(cp_data))
 
                 for row in conn.execute("SELECT blob_key, blob_data, signature FROM blobs"):
                     b_key, b_data, sig = row
                     ctx = f"blob:{b_key!r}:"
                     if not self._verify_signature(b_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint blob: signature mismatch.")
-                    self.blobs[pickle.loads(b_key)] = pickle.loads(self._decrypt(b_data))
+                    self.blobs[safe_checkpoint_loads(b_key)] = safe_checkpoint_loads(self._decrypt(b_data))
 
                 for row in conn.execute("SELECT write_key, write_tuple, signature FROM writes"):
                     w_key, w_data, sig = row
                     ctx = f"write:{w_key!r}:"
                     if not self._verify_signature(w_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint write: signature mismatch.")
-                    outer_key, inner_key = pickle.loads(w_key)
-                    self.writes[outer_key][inner_key] = pickle.loads(self._decrypt(w_data))
+                    outer_key, inner_key = safe_checkpoint_loads(w_key)
+                    self.writes[outer_key][inner_key] = safe_checkpoint_loads(self._decrypt(w_data))
             finally:
                 conn.close()
 

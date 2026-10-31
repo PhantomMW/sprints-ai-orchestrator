@@ -241,6 +241,7 @@ if _safe_has_fork:
                         _c_MAX = 64 * 1024
                         _c_start = _safe_time()
                         _c_timeout = 2.0
+                        _c_overflow = False
                         while _c_total < _c_MAX:
                             _c_rem = max(0.01, _c_timeout - (_safe_time() - _c_start))
                             _c_rlist, _, _ = _safe_select([_c_r_fd], [], [], _c_rem)
@@ -260,6 +261,14 @@ if _safe_has_fork:
                             _c_chunks.append(_c_chk)
                             _c_total += len(_c_chk)
 
+                        if _c_total >= _c_MAX:
+                            _c_overflow = True
+                            if _safe_kill:
+                                try:
+                                    _safe_kill(_c_pid, _safe_SIGKILL)
+                                except Exception:
+                                    pass
+
                         _safe_close(_c_r_fd)
                         try:
                             _, _c_status = _safe_waitpid(_c_pid, 0)
@@ -268,7 +277,9 @@ if _safe_has_fork:
 
                         _pipe_out = b"".join(_c_chunks).decode("utf-8", "replace")
                         _c_exit = _safe_WEXITSTATUS(_c_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_c_status)) else -1
-                        if _c_exit == 0 and _pipe_out == "OK":
+                        if _c_overflow:
+                            _w_results.append({{"name": _name, "status": "FAILED", "error": "Assertion IPC payload exceeded limit of 64 KiB"}})
+                        elif _c_exit == 0 and _pipe_out == "OK":
                             _w_results.append({{"name": _name, "status": "PASSED", "error": ""}})
                         elif _pipe_out.startswith("FAIL:"):
                             _w_results.append({{"name": _name, "status": "FAILED", "error": _pipe_out[5:]}})
@@ -305,6 +316,7 @@ if _safe_has_fork:
         _w_MAX = 512 * 1024
         _w_start = _safe_time()
         _w_timeout = 5.0
+        _w_overflow = False
         while _w_total < _w_MAX:
             _w_rem = max(0.01, _w_timeout - (_safe_time() - _w_start))
             _w_rlist, _, _ = _safe_select([_m_r_fd], [], [], _w_rem)
@@ -324,6 +336,14 @@ if _safe_has_fork:
             _w_chunks.append(_w_chk)
             _w_total += len(_w_chk)
 
+        if _w_total >= _w_MAX:
+            _w_overflow = True
+            if _safe_kill:
+                try:
+                    _safe_kill(_worker_pid, _safe_SIGKILL)
+                except Exception:
+                    pass
+
         _safe_close(_m_r_fd)
         try:
             _, _w_status = _safe_waitpid(_worker_pid, 0)
@@ -333,23 +353,32 @@ if _safe_has_fork:
         _raw_worker_out = b"".join(_w_chunks).decode("utf-8", "replace")
         _w_exit = _safe_WEXITSTATUS(_w_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_w_status)) else -1
         _worker_data = None
-        if _w_exit == 0 and _raw_worker_out:
+
+        if _w_overflow:
+            _results = [
+                {{"name": _name, "status": "FAILED", "error": "Worker IPC payload exceeded maximum limit of 512 KiB"}}
+                for _name, _ in _test_cases
+            ]
+            _captured_stdout = ""
+            _compilation_error = "Worker IPC payload exceeded maximum limit of 512 KiB"
+        elif _w_exit == 0 and _raw_worker_out:
             try:
                 _worker_data = json.loads(_raw_worker_out)
             except Exception:
                 pass
 
-        if _worker_data:
-            _results = _worker_data.get("results", [])
-            _captured_stdout = _worker_data.get("captured_stdout", "")
-            _compilation_error = _worker_data.get("compilation_error")
-        else:
-            _results = [
-                {{"name": _name, "status": "FAILED", "error": f"Abnormal worker process exit (exit code {{_w_exit}})"}}
-                for _name, _ in _test_cases
-            ]
-            _captured_stdout = ""
-            _compilation_error = f"Abnormal worker termination ({{_w_exit}})"
+        if not _w_overflow:
+            if _worker_data:
+                _results = _worker_data.get("results", [])
+                _captured_stdout = _worker_data.get("captured_stdout", "")
+                _compilation_error = _worker_data.get("compilation_error")
+            else:
+                _results = [
+                    {{"name": _name, "status": "FAILED", "error": f"Abnormal worker process exit (exit code {{_w_exit}})"}}
+                    for _name, _ in _test_cases
+                ]
+                _captured_stdout = ""
+                _compilation_error = f"Abnormal worker termination ({{_w_exit}})"
 else:
     # Non-fork fallback (Windows development / non-fork environments)
     try:
