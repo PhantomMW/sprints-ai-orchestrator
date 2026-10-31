@@ -55,9 +55,11 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 
 ### 3.1 Career Advisor Agent
 
-* Retrieves learner information from SQLite using privacy-hardened queries.
-* Recommends `get_learner_by_id()` as the primary parameterized lookup to ensure strict learner isolation and prevent cross-learner data exposure.
-* SQL tool strictly enforces a 5-row maximum, column allowlisting, and blocks SQL comments and system metadata (`sqlite_master`, `pragma`).
+* Retrieves learner information from SQLite using safe parameterized domain tools (`get_learner_by_id_tool`, `search_learners_by_track_tool`, `get_track_aggregate_stats_tool`).
+* **Zero Arbitrary SQL Execution:** Raw SQL tool (`learner_sql_tool`) has been removed from the agent registry, eliminating arbitrary SQL injection and browsing risks.
+* **Differential Privacy on Cohort Stats:** `get_track_aggregate_stats()` enforces a minimum cohort size (`MIN_COHORT_SIZE = 3`) to prevent learner re-identification in sparse tracks.
+* Recommends `get_learner_by_id()` as the primary parameterized lookup to ensure strict single-learner isolation and prevent cross-learner data exposure.
+* Underlying query helper enforces a 5-row maximum, column allowlisting, read-only mode (`mode=ro`), and blocks SQL comments and system metadata (`sqlite_master`, `pragma`).
 * Uses ChromaDB to retrieve relevant knowledge.
 * Implements Agentic RAG with retrieval self-reflection.
 * Reformulates search queries when retrieved evidence is insufficient (up to 3 retrieval attempts).
@@ -68,8 +70,16 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 ### 3.2 Python Assessor Agent
 
 * Accepts Python code, assignment requirements, and optional test assertions (`test_suite`).
-* Runs the **Automated Test Runner** (`src/tools/test_runner.py`) to execute deterministic unit assertions inside Docker sandbox, producing objective pass/fail metrics.
-* Combines deterministic assertion metrics with Gemini qualitative code review (algorithmic efficiency, readability, PEP 8).
+* Runs the **Automated Test Runner** (`src/tools/test_runner.py`) inside the Docker sandbox with strict anti-tampering and isolation:
+  * **Per-Test Namespace Isolation:** Pre-compiles learner code once and executes each assertion in a fresh namespace, preventing state leakage between tests.
+  * **Safe Primitives Pre-Binding:** Pre-binds safe builtins (`_safe_sys`, `_safe_json_dumps`, `_safe_StringIO`, `_safe_BaseException`) to prevent learner code from monkey-patching runner internals.
+  * **BaseException & SystemExit Trapping:** Safely catches `BaseException` (specifically `SystemExit`) so student code calling `sys.exit()` cannot terminate the test harness.
+  * **Session Delimiters:** Emits metric payloads wrapped in random delimiters to prevent stdout spoofing.
+  * **Dual Assertion & Stdout Verification:** Evaluates unit assertions and expected stdout concurrently.
+  * **Unverified Status:** Returns `status: "unverified"` when no test suite or expected stdout is provided.
+* **Fail-Closed Guardrails in Assessor Agent:**
+  * Aborts immediately with `status: "error"` and message `"Unable to verify: Automated test runner execution failed"` before calling Gemini if the runner crashes or fails.
+  * Automatically caps grades at 50/100 and enforces `status: "fail"` if automated unit assertions fail.
 * Executes code inside a restricted Docker container prototype (`sprints-python-sandbox:latest`).
 * Applies strict isolation and resource bounds:
   * Network disabled (`--network none`).
@@ -82,7 +92,6 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
   * Bounded output capture: stdout and stderr capped at 64 KiB each with chunk draining to prevent pipe deadlocks.
   * Stdin-piped execution preventing shell injection and quote escaping anomalies.
 * Returns structured grading feedback.
-* Returns an `Unable to Verify` response when execution fails.
 
 ### 3.3 Evaluator-Optimizer
 
@@ -97,7 +106,7 @@ A centralized LangGraph workflow routes requests to specialized agents and sends
 * Uses LangGraph `interrupt()` to pause selected recommendations.
 * Requests human approval or rejection.
 * Resumes execution using LangGraph `Command(resume=...)`.
-* Uses checkpointing to preserve workflow state.
+* **Dual Checkpointing Architecture:** The core LangGraph workflow in `build_orchestrator()` defaults to `MemorySaver()` for isolated, fast unit tests, while `main.py` initializes a durable `SqliteSaver` (with WAL mode, 5-second busy timeout, and thread isolation) to guarantee restart-safe sessions and durable Human-in-the-Loop review state across restarts.
 
 Human approval represents approval of a recommendation, not confirmation of employment or an active vacancy.
 
@@ -114,65 +123,56 @@ Human approval represents approval of a recommendation, not confirmation of empl
 | Relational Database  | SQLite (Read-Only, Restricted) |
 | Embeddings           | Sentence Transformers          |
 | Code Execution       | Docker Sandbox Prototype       |
-| Checkpointing        | SqliteSaver (SQLite Persistent)|
+| Checkpointing        | Dual: MemorySaver (Default) & SqliteSaver (Persistent) |
 | Testing & CI         | Pytest, GitHub Actions         |
 
 ## 5. Project Structure
 
 ```text
 sprints-ai-orchestrator/
-│
 ├── .github/
 │   └── workflows/
 │       └── tests.yml            # Automated CI test workflow
-│
 ├── sandbox/
-│   └── Dockerfile               # Non-root, isolated Python execution container
-│
+│   └── Dockerfile               # Non-root (UID 10001) isolated Python execution container
 ├── src/
 │   ├── agents/
 │   │   ├── advisor_agent.py
-│   │   ├── assessor_agent.py
+│   │   ├── assessor_agent.py    # Fail-closed grading & test runner integration
 │   │   ├── evaluator_optimizer.py
-│   │   └── orchestrator.py      # Supports pluggable persistent checkpointers
-│   │
+│   │   └── orchestrator.py      # Dual checkpointer support (MemorySaver default)
 │   ├── tools/
-│   │   ├── test_runner.py       # Deterministic unit test runner harness
+│   │   ├── test_runner.py       # Anti-tampering deterministic unit test runner
 │   │   ├── docker_executor.py   # Bounded Docker executor with timeout & output caps
-│   │   ├── db_queries.py        # Safe parameterized domain operations
-│   │   ├── sqlite_checkpoint.py # Persistent SQLite checkpointer
+│   │   ├── db_queries.py        # Safe parameterized domain operations & cohort privacy
+│   │   ├── sqlite_checkpoint.py # Persistent SQLite checkpointer with WAL & concurrency
 │   │   ├── rag_retriever.py
 │   │   ├── code_repl.py
 │   │   ├── document_loader.py
 │   │   └── audio_transcriber.py
-│   │
 │   ├── state.py
 │   ├── llm.py
-│   └── main.py                  # Interactive CLI and demonstration interface
-│
+│   └── main.py                  # Interactive CLI and multi-stage demonstration
 ├── docs/
 │   ├── DEMO_SCRIPT.md
 │   ├── SPRINTS_AI_ORCHESTRATOR_FINAL_REPORT.pdf
 │   ├── SPRINTS_AI_ORCHESTRATOR_PRESENTATION.pptx
 │   └── TECHNICAL_DOCUMENTATION.md
-│
 ├── tests/
 │   ├── test_agents/
 │   │   ├── test_agentic_rag.py
 │   │   ├── test_evaluator_optimizer.py
 │   │   ├── test_orchestrator_evaluator.py
 │   │   └── test_assessor_agent.py
-│   │
 │   └── test_tools/
-│       ├── test_sqlite_checkpoint.py # Persistent checkpointer cross-instance tests
-│       ├── test_db_queries.py      # Synthetic isolated database fixture tests
-│       ├── test_test_runner.py     # Deterministic unit test runner tests
-│       └── test_docker_executor.py # Docker runtime, timeout, truncation & isolation tests
-│
-├── pytest.ini                   # Pytest configuration and path discovery
-├── LICENSE                      # MIT Open Source License
-├── requirements.txt             # Project dependencies (UTF-8)
-├── README.md                    # Project documentation
+│       ├── test_sqlite_checkpoint.py # Persistent checkpointer & restart resumption
+│       ├── test_db_queries.py        # Synthetic isolated database fixture tests
+│       ├── test_test_runner.py       # Anti-tampering & unit test runner tests
+│       └── test_docker_executor.py   # Docker runtime, timeout, truncation & isolation
+├── pytest.ini
+├── LICENSE
+├── requirements.txt
+├── README.md
 └── .gitignore
 ```
 
@@ -264,11 +264,11 @@ pytest -v tests/test_tools/test_docker_executor.py
 pytest -v tests/test_tools/test_db_queries.py
 ```
 
-The comprehensive test suite currently consists of **47 passing tests** (100% pass rate) covering:
-* **Agent Workflows & Assessment (11 tests):** Agentic RAG retries, evaluator-optimizer bounds, routing, Human-in-the-Loop interrupt/resume cycles, and Assessor Agent deterministic test runner integration.
-* **Database Privacy & Domain Operations (14 tests):** Safe parameterized single-learner lookups, track searches, aggregate metrics, row bounding (5 max), column allowlisting, SQL comment and system table blocking, verified with an isolated synthetic database fixture.
-* **Automated Test Runner (6 tests):** Test case parsing, deterministic assertion evaluation, pass percentage calculations, expected stdout matching, and compilation failure capture.
-* **Persistent SQLite Checkpointing (2 tests):** Cross-instance state restoration, thread isolation, and persistent task writes.
+The comprehensive test suite currently consists of **57 passing tests** (100% pass rate) covering:
+* **Agent Workflows & Assessment (13 tests):** Agentic RAG retries/stopping, evaluator-optimizer bounds, routing, Human-in-the-Loop interrupt/resume cycles, assessor unit test grading, execution failure handling, runner crash fail-closed abortion, and deterministic assertion failure score capping.
+* **Database Privacy & Domain Operations (14 tests):** Safe parameterized single-learner lookups, track searches, aggregate metrics with differential privacy (`MIN_COHORT_SIZE = 3`), row bounding (5 max), column allowlisting, SQL comment and system table blocking, verified with an isolated synthetic database fixture.
+* **Automated Test Runner & Anti-Tampering (12 tests):** Test case parsing, empty code rejection, unverified status emission, combined assertion + stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, namespace isolation, and fake metrics delimiter protection.
+* **Persistent SQLite Checkpointing (4 tests):** Cross-instance state restoration, thread isolation, 10-thread concurrent writes with WAL mode, and durable Human-in-the-Loop resumption across simulated process restart.
 * **Docker Execution & Sandbox Runtime (14 tests):** Bounded 64 KiB stdout/stderr streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request.

@@ -190,9 +190,17 @@ def search_learners_by_track(bootcamp_track: str, limit: int = MAX_QUERY_ROWS) -
         }
 
 
+MIN_COHORT_SIZE = 3
+
+
 def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, Any]:
     """
     Retrieve safe aggregate metrics (count, average score) without exposing raw rows.
+
+    Privacy Controls:
+        - Minimum Cohort Size (k-anonymity): requires at least MIN_COHORT_SIZE (3)
+          learners before returning aggregate averages, preventing individual identification
+          in sparse or single-learner tracks.
 
     Args:
         bootcamp_track: Optional track filter.
@@ -230,9 +238,30 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
                 cursor = conn.execute(query)
 
             row = cursor.fetchone()
+            count = row["learner_count"] if row else 0
+
+            # Privacy protection: suppress averages if cohort is smaller than MIN_COHORT_SIZE
+            if count < MIN_COHORT_SIZE:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Cohort size ({count}) is below the minimum privacy threshold "
+                        f"({MIN_COHORT_SIZE}) required for aggregate metrics."
+                    ),
+                    "min_cohort_size": MIN_COHORT_SIZE,
+                    "learner_count": count,
+                    "data": {
+                        "learner_count": count,
+                        "privacy_restricted": True,
+                    },
+                }
+
+            data_dict = dict(row) if row else {}
+            data_dict["privacy_restricted"] = False
+            data_dict["min_cohort_size"] = MIN_COHORT_SIZE
             return {
                 "status": "success",
-                "data": dict(row) if row else {},
+                "data": data_dict,
             }
     except sqlite3.Error as error:
         return {
@@ -347,19 +376,9 @@ def query_learner_database(sql_query: str) -> dict[str, Any]:
         }
 
 
-@tool
-def learner_sql_tool(sql_query: str) -> dict[str, Any]:
-    """
-    Retrieve learner information from the Sprints SQLite database.
-
-    Privacy and Security Notice:
-        - Results are strictly capped at 5 rows to prevent bulk data exfiltration.
-        - Only SELECT queries targeting the 'learners' table are permitted.
-        - Disallowed or unauthorized columns are filtered.
-        - For individual learner recommendations, use get_learner_by_id()
-          to guarantee learner data privacy and prevent cross-learner exposure.
-    """
-    return query_learner_database(sql_query)
+# Legacy query tool removed from Agent registry.
+# All agents must use parameterized operations: get_learner_by_id_tool,
+# search_learners_by_track_tool, and get_track_aggregate_stats_tool.
 
 
 @tool

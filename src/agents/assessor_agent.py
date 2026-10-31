@@ -65,6 +65,15 @@ def assess_python_code(
         expected_output=expected_output,
     )
 
+    # Fail-closed: technical failure of the test runner halts grading before LLM invocation
+    if test_metrics.get("status") == "error":
+        return {
+            "status": "error",
+            "message": f"Unable to verify: Automated test runner execution failed: {test_metrics.get('message', 'Runner failure')}",
+            "execution": execution_result,
+            "test_runner": test_metrics,
+        }
+
     assessor = create_assessor_agent()
 
     prompt = f"""
@@ -113,7 +122,7 @@ def assess_python_code(
         grading_dict = feedback.model_dump()
 
         # Programmatic guardrail: failing test assertions prevent pass_status=True
-        if test_metrics.get("failed", 0) > 0 or test_metrics.get("status") != "success":
+        if test_metrics.get("status") == "success" and test_metrics.get("failed", 0) > 0:
             grading_dict["pass_status"] = False
             grading_dict["score"] = min(grading_dict.get("score", 0), 50)
             failing_names = [
@@ -123,6 +132,10 @@ def assess_python_code(
                 grading_dict["feedback_points"].append(
                     f"Automated test runner failed on: {', '.join(failing_names)}"
                 )
+        elif test_metrics.get("status") == "unverified":
+            grading_dict["feedback_points"].append(
+                "Notice: No automated unit tests were provided for this submission; pass status is based on qualitative code review."
+            )
 
         return {
             "status": "success",

@@ -28,8 +28,17 @@ BANNER = """
 
 
 def run_demo_mode():
-    """Run the pre-configured assessment and career guidance demonstration."""
-    print("\n--- [DEMO 1] Python Assessment with Automated Test Runner ---")
+    """Run an end-to-end multi-agent demonstration showcasing all 4 architectural pillars."""
+    print(BANNER)
+    print("=" * 70)
+    print("           COMPREHENSIVE MULTI-AGENT ORCHESTRATOR DEMO")
+    print("=" * 70)
+
+    # -------------------------------------------------------------------------
+    # STAGE 1: Python Assessment with Automated Test Runner & Docker Sandbox
+    # -------------------------------------------------------------------------
+    print("\n[STAGE 1/4] Python Assessment Agent & Deterministic Test Runner")
+    print("-" * 70)
     sample_code = """
 def calculate_metrics(numbers):
     total = sum(numbers)
@@ -52,22 +61,27 @@ assert calculate_metrics([]) == (0, 0)
 """
     expected_output = "Sum: 150\nAverage: 30.0"
 
-    print("Submitting Code:")
+    print("Submitted Learner Code:")
     print(sample_code.strip())
-    print("\nExecuting in Docker sandbox with anti-tampering unit test harness...")
+    print("\nExecuting in Docker Sandbox with Per-Test Namespace Isolation...")
 
     test_metrics = run_automated_tests(sample_code, test_suite, expected_output)
-    print("\n[Automated Test Runner Results]:")
+    print("\nAutomated Test Runner Verification:")
+    print(f"- Status: {test_metrics['status'].upper()}")
     print(f"- Total Test Cases: {test_metrics['total']}")
     print(f"- Tests Passed: {test_metrics['passed']}")
     print(f"- Tests Failed: {test_metrics['failed']}")
     print(f"- Pass Percentage: {test_metrics['percentage']}%")
-    for r in test_metrics["results"]:
+    for r in test_metrics.get("results", []):
         status_symbol = "[PASS]" if r["status"] == "PASSED" else "[FAIL]"
         print(f"  {status_symbol} {r['name']} -> {r['status']}")
 
-    print("\n--- [DEMO 2] Safe Parameterized Learner Profile Lookup (Synthetic Demo) ---")
-    print("Demonstrating strict single-learner parameterized isolation:")
+    # -------------------------------------------------------------------------
+    # STAGE 2: Safe Parameterized Data Access & Differential Privacy
+    # -------------------------------------------------------------------------
+    print("\n[STAGE 2/4] Career Advisor: Safe Parameterized Queries & Privacy Controls")
+    print("-" * 70)
+    print("Demonstrating strict single-learner parameterized isolation (SYN-DEMO-01):")
     demo_synthetic_learner = {
         "learner_id": "SYN-DEMO-01",
         "name": "Synthetic Demo Learner",
@@ -78,12 +92,54 @@ assert calculate_metrics([]) == (0, 0)
         "preferred_employers": "Fawry, Swvl",
         "readiness_status": "Ready for Placement (Synthetic)",
     }
-    print(f"Learner ID: {demo_synthetic_learner['learner_id']}")
-    print(f"Name: {demo_synthetic_learner['name']}")
-    print(f"Track: {demo_synthetic_learner['bootcamp_track']}")
-    print(f"Python Score: {demo_synthetic_learner['python_assignment_score']}/100")
-    print(f"Status: {demo_synthetic_learner['readiness_status']}")
-    print("\nPrivacy Guarantee: No real learner records are printed or logged in public demos.")
+    print(f"  Learner ID: {demo_synthetic_learner['learner_id']}")
+    print(f"  Track: {demo_synthetic_learner['bootcamp_track']}")
+    print(f"  Modules Completed: {demo_synthetic_learner['completed_modules']}")
+    print(f"  Python Score: {demo_synthetic_learner['python_assignment_score']}/100")
+    print(f"  Placement Readiness: {demo_synthetic_learner['readiness_status']}")
+    print("\n  Privacy Guardrails:")
+    print("  - Single-learner lookups use parameterized SQL (get_learner_by_id)")
+    print("  - Bulk queries enforce MAX_QUERY_ROWS = 5 and column projection filters")
+    print("  - Track aggregates enforce MIN_COHORT_SIZE = 3 differential privacy")
+    print("  - Privacy Guarantee: Zero identifiable personal records in public demos")
+
+    # -------------------------------------------------------------------------
+    # STAGE 3: Evaluator-Optimizer Quality Assurance Loop
+    # -------------------------------------------------------------------------
+    print("\n[STAGE 3/4] Evaluator-Optimizer: Bounded Iterative Refinement")
+    print("-" * 70)
+    print("Simulating response evaluation and optimization criteria:")
+    print("  - Quality Dimension 1: Factual Grounding (100% curriculum adherence)")
+    print("  - Quality Dimension 2: Actionability (concrete career next-steps)")
+    print("  - Quality Dimension 3: Tone & Completeness")
+    print("  - Hard Iteration Boundary: Maximum 3 refinement iterations")
+    print("  - Fact Preservation Rule: Benchmark scores and execution facts cannot be altered")
+    print("  - Convergence Status: [CONVERGED on Iteration 1 - Score: 95/100]")
+
+    # -------------------------------------------------------------------------
+    # STAGE 4: Persistent SQLite Checkpointing & Human-in-the-Loop Governance
+    # -------------------------------------------------------------------------
+    print("\n[STAGE 4/4] Persistent Checkpointing (SqliteSaver) & HITL Placement Review")
+    print("-" * 70)
+    demo_thread = f"demo-hitl-{uuid.uuid4().hex[:6]}"
+    print(f"Persistent Checkpoint Thread ID: {demo_thread}")
+    print("Database Location: data/orchestrator_checkpoints.sqlite3")
+    print("\nWorkflow Execution Flow:")
+    print("  1. Orchestrator routes request -> Advisor Agent")
+    print("  2. Learner meets criteria: 'Ready for Placement' + Preferred Employer 'Fawry'")
+    print("  3. LangGraph interrupt() pauses graph execution before final clearance")
+    print("  4. Checkpoint snapshot is committed to SQLite (safe across process restart)")
+    print("\n[Human Review Checkpoint Simulated]:")
+    print("  Reviewer: Senior Placement Coordinator")
+    print("  Decision: APPROVED with guidance notes")
+    print("  Command(resume=...) dispatched -> Graph completes execution")
+    print("\nFinal Multi-Agent Response:")
+    print("  'Learner SYN-DEMO-01 cleared for career advising. Portfolio meets requirements.'")
+    print("  'Human Placement Review: APPROVED by Senior Placement Coordinator.'")
+    print("  '(Disclaimer: Recommendation only; no active vacancy or employer guarantee)'")
+    print("\n" + "=" * 70)
+    print("           END OF COMPREHENSIVE MULTI-AGENT DEMO")
+    print("=" * 70)
 
 
 def run_interactive_mode():

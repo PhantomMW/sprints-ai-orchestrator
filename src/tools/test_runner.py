@@ -30,15 +30,20 @@ def run_automated_tests(
     expected_output: str = "",
 ) -> dict[str, Any]:
     """
-    Execute deterministic unit tests against a learner's Python submission with anti-tampering.
+    Execute deterministic unit tests against a learner's Python submission.
 
-    Security & Anti-Tampering Controls:
+    Isolation & Validation Controls:
         - Executes inside an isolated, non-root Docker container prototype.
-        - Randomized session token prevents learner code from spoofing test metrics delimiters.
-        - Isolated namespace copies for each test case prevent inter-test state pollution.
-        - Strict timeout and resource limits.
-        - Explicit failure enforcement: if the code fails to compile or times out,
-          zero passed tests are awarded.
+        - Randomized session token delimits test metrics from arbitrary student output.
+        - Per-test namespace isolation: each test case executes against a clean,
+          independent global namespace preventing state pollution between assertions.
+        - Catches BaseException (including SystemExit) to prevent student code from
+          aborting the test harness prematurely.
+        - Safe reference binding protects json and sys channels from student tampering.
+        - Concurrently evaluates both unit assertions and expected stdout matching
+          when both are provided.
+        - Unverified state: if neither assertions nor expected output are provided,
+          returns an explicit 'unverified' status instead of fabricating false passes.
 
     Args:
         code: Python source code submitted by the learner.
@@ -46,8 +51,8 @@ def run_automated_tests(
         expected_output: Optional expected standard output string.
 
     Returns:
-        Structured test metrics dictionary including total, passed, failed,
-        percentage, and individual test case outcomes.
+        Structured test metrics dictionary including status, total, passed,
+        failed, percentage, and individual test case outcomes.
     """
     if not isinstance(code, str) or not code.strip():
         return {
@@ -64,7 +69,7 @@ def run_automated_tests(
     if test_suite.strip():
         test_cases.extend(parse_test_suite_into_cases(test_suite))
 
-    if expected_output.strip() and not test_suite.strip():
+    if expected_output.strip():
         test_cases.append(
             (
                 "Standard Output Match",
@@ -72,64 +77,100 @@ def run_automated_tests(
             )
         )
 
+    # When no assertions or expected output are supplied, do not fabricate passes
     if not test_cases:
-        test_cases.append(("Execution Cleanliness (Smoke Test)", "pass"))
+        smoke_res = execute_in_docker(code)
+        is_clean = smoke_res.get("status") == "success" and smoke_res.get("exit_code") == 0
+        return {
+            "status": "unverified",
+            "message": "No test assertions or expected output provided; correctness unverified.",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "percentage": 0.0,
+            "results": [],
+            "smoke_test_passed": is_clean,
+            "execution": smoke_res,
+        }
 
     session_token = uuid.uuid4().hex
     start_marker = f"__TEST_METRICS_{session_token}_START__"
     end_marker = f"__TEST_METRICS_{session_token}_END__"
 
+    # Python harness script executed inside the Docker container
     harness = f"""
 import sys
 import io
 import json
 
-_captured_io = io.StringIO()
-_orig_stdout = sys.stdout
-sys.stdout = _captured_io
+# Bind safe primitives before executing untrusted student code
+_safe_sys = sys
+_safe_json_dumps = json.dumps
+_safe_StringIO = io.StringIO
+_safe_BaseException = BaseException
+_safe_orig_stdout = sys.stdout
 
-_learner_ns = {{}}
+_code_str = {repr(code)}
+_start_marker = {repr(start_marker)}
+_end_marker = {repr(end_marker)}
+_test_cases = {repr(test_cases)}
+
 _compilation_error = None
+_compiled_code = None
 
 try:
-    exec({repr(code)}, _learner_ns)
-except Exception as _e:
-    _compilation_error = f"{{type(_e).__name__}}: {{_e}}"
+    _compiled_code = compile(_code_str, "<learner_code>", "exec")
+except _safe_BaseException as _ce:
+    _compilation_error = f"{{type(_ce).__name__}}: {{_ce}}"
 
-sys.stdout = _orig_stdout
-_captured_stdout = _captured_io.getvalue()
-_learner_ns["_captured_stdout"] = _captured_stdout
+_captured_stdout = ""
+if not _compilation_error:
+    _io_buf = _safe_StringIO()
+    _safe_sys.stdout = _io_buf
+    try:
+        _smoke_ns = {{"__builtins__": __builtins__}}
+        exec(_compiled_code, _smoke_ns)
+    except _safe_BaseException as _re:
+        _compilation_error = f"{{type(_re).__name__}}: {{_re}}"
+    finally:
+        _safe_sys.stdout = _safe_orig_stdout
+        _captured_stdout = _io_buf.getvalue()
 
 _results = []
 if _compilation_error:
-    _results.append({{"name": "Code Compilation / Execution", "status": "FAILED", "error": _compilation_error}})
+    for _name, _ in _test_cases:
+        _results.append({{"name": _name, "status": "FAILED", "error": _compilation_error}})
 else:
-    _test_cases = {repr(test_cases)}
     for _name, _case_src in _test_cases:
-        _test_ns = _learner_ns.copy()
-        _test_ns["_captured_stdout"] = _captured_stdout
+        # Provide clean, independent namespace per test case (true isolation)
+        _test_ns = {{
+            "__builtins__": __builtins__,
+            "_captured_stdout": _captured_stdout,
+        }}
         try:
+            exec(_compiled_code, _test_ns)
             exec(_case_src, _test_ns)
             _results.append({{"name": _name, "status": "PASSED", "error": ""}})
         except AssertionError as _ae:
             _err_msg = str(_ae) or "Assertion failed"
             _results.append({{"name": _name, "status": "FAILED", "error": _err_msg}})
-        except Exception as _e:
-            _results.append({{"name": _name, "status": "FAILED", "error": f"{{type(_e).__name__}}: {{_e}}"}})
+        except _safe_BaseException as _be:
+            _results.append({{"name": _name, "status": "FAILED", "error": f"{{type(_be).__name__}}: {{_be}}"}})
 
 _passed = sum(1 for _r in _results if _r["status"] == "PASSED")
 _total = len(_results)
 _pct = round((_passed / _total * 100), 1) if _total > 0 else 0.0
 
-print({repr(start_marker)})
-print(json.dumps({{
+# Emit output using pre-bound safe stdout writer
+_output_json = _safe_json_dumps({{
     "total": _total,
     "passed": _passed,
     "failed": _total - _passed,
     "percentage": _pct,
     "results": _results
-}}))
-print({repr(end_marker)})
+}})
+
+_safe_sys.stdout.write(f"\\n{{_start_marker}}\\n{{_output_json}}\\n{{_end_marker}}\\n")
 """
 
     docker_res = execute_in_docker(harness)
@@ -157,7 +198,7 @@ print({repr(end_marker)})
     if not match:
         return {
             "status": "error",
-            "message": "Unable to parse test runner metrics.",
+            "message": "Unable to parse test runner metrics from sandbox output.",
             "total": len(test_cases),
             "passed": 0,
             "failed": len(test_cases),

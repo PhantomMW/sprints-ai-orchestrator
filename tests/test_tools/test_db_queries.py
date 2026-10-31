@@ -4,12 +4,14 @@ import pytest
 from src.tools.db_queries import (
     ALLOWED_COLUMNS,
     MAX_QUERY_ROWS,
+    MIN_COHORT_SIZE,
     get_learner_by_id,
     get_learner_by_id_tool,
     get_track_aggregate_stats,
-    learner_sql_tool,
+    get_track_aggregate_stats_tool,
     query_learner_database,
     search_learners_by_track,
+    search_learners_by_track_tool,
 )
 
 
@@ -148,12 +150,25 @@ def test_get_learner_by_id_with_invalid_id():
     assert result2["status"] == "error"
 
 
-def test_learner_sql_tool_invokes_query_learner_database():
-    """Verify that the LangChain tool wrapper enforces row limits."""
-    res = learner_sql_tool.invoke({"sql_query": "SELECT * FROM learners"})
-    assert res["status"] == "success"
-    assert res["row_count"] == MAX_QUERY_ROWS
-    assert res["truncated"] is True
+def test_get_track_aggregate_stats_enforces_minimum_cohort_size(setup_test_db):
+    """Verify that small cohorts (< MIN_COHORT_SIZE) are masked for differential privacy."""
+    # Insert exactly 1 learner in a rare track (below MIN_COHORT_SIZE = 3)
+    with sqlite3.connect(setup_test_db) as conn:
+        conn.execute(
+            "INSERT INTO learners VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("SPR-9999", "Solo Student", "Rare Quantum Track", 1, 99, 50000, "None", "In Progress"),
+        )
+
+    res_small = get_track_aggregate_stats("Rare Quantum Track")
+    assert res_small["status"] == "error"
+    assert res_small["data"]["privacy_restricted"] is True
+    assert "minimum privacy threshold" in res_small["message"]
+
+    # Cohort with 7 learners satisfies privacy threshold
+    res_large = get_track_aggregate_stats("Advanced Agentic AI")
+    assert res_large["status"] == "success"
+    assert res_large["data"]["privacy_restricted"] is False
+    assert res_large["data"]["learner_count"] >= MIN_COHORT_SIZE
 
 
 def test_search_learners_by_track():

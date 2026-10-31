@@ -136,13 +136,20 @@ applications.
 
 
 
-The graph is implemented with `StateGraph(AgentState)`. A persistent `SqliteSaver`
+The graph is implemented with `StateGraph(AgentState)`. The graph builder
 
-checkpointer is attached by default when the graph is compiled, saving thread
+`build_orchestrator(checkpointer=None)` defaults to LangGraph's `MemorySaver` for
 
-checkpoints and writes to `data/orchestrator_checkpoints.sqlite3`. An `InMemorySaver`
+fast, isolated in-memory automated testing. For persistent runtime execution, `main.py`
 
-is also supported for ephemeral testing.
+(interactive CLI and automated demo) initializes and attaches a persistent `SqliteSaver`
+
+checkpointer (writing to `data/orchestrator_checkpoints.sqlite3` with WAL mode, 5-second
+
+busy timeout, and thread isolation), guaranteeing restart-safe workflows and durable
+
+Human-in-the-Loop review states.
+
 
 
 
@@ -522,15 +529,50 @@ of 60 in the assessor.
 
 
 
-`src/tools/test_runner.py` executes automated unit test assertions against
+`src/tools/test_runner.py` provides an isolated, anti-tampering test runner
 
-the learner's code. To prevent student code from forging success reports,
+harness executing deterministic unit test assertions inside the Docker sandbox.
 
-a cryptographically unique UUID session token wraps metric emission. If assertions
+Its security and isolation architecture includes:
 
-fail or syntax errors occur, programmatic guardrails cap the grade and enforce
+- **Per-Test Namespace Isolation:** Learner code is pre-compiled via `compile()`, and each
 
-a failing status.
+  assertion case executes within a fresh, isolated namespace (`_test_ns = {"__builtins__": __builtins__, ...}`),
+
+  preventing state leakage between individual tests.
+
+- **Safe Builtins Pre-Binding:** Critical primitives (`_safe_sys`, `_safe_json_dumps`, `_safe_StringIO`, `_safe_BaseException`)
+
+  are bound to local variables upfront, preventing learner code from monkey-patching reporting internals.
+
+- **BaseException & SystemExit Trapping:** Catches `BaseException` (specifically `SystemExit`), preventing
+
+  learner code from invoking `sys.exit()` to terminate the test runner harness.
+
+- **Anti-Tampering Delimiters:** Emits metric payloads enclosed in random session delimiters
+
+  (`###TEST_METRICS_START_<UUID>### ... ###TEST_METRICS_END_<UUID>###`) to prevent student stdout spoofing.
+
+- **Dual Assertion & Stdout Verification:** Evaluates explicit unit assertions (`test_suite`) and expected
+
+  standard output (`expected_output`) concurrently.
+
+- **Unverified State:** Emits `status: "unverified"` when no assertions or expected outputs are provided,
+
+  avoiding synthetic pass claims.
+
+`src/agents/assessor_agent.py` enforces strict programmatic guardrails:
+
+- **Fail-Closed Safety:** If the automated test runner encounters a technical failure (`test_metrics["status"] == "error"`),
+
+  the assessor immediately returns `status: "error"` with message `"Unable to verify: Automated test runner execution failed"`,
+
+  aborting the workflow before invoking the LLM.
+
+- **Deterministic Grade Capping:** If unit test assertions fail (`passed is False`), the score is capped
+
+  at 50/100, `status: "fail"` is enforced, and failing assertion details are injected into LLM feedback.
+
 
 
 
@@ -726,15 +768,34 @@ employer, or submit an application.
 
 ### Persistent Checkpointing
 
+The LangGraph orchestrator employs a dual-checkpointer architecture:
 
+- **`MemorySaver` (Default):** `build_orchestrator(checkpointer=None)` defaults to in-memory
 
-The graph is compiled with `SqliteSaver` by default, storing thread checkpoints,
+  checkpointing, providing fast, stateless, and fully isolated test runs.
 
-intermediate writes, and channel states in `data/orchestrator_checkpoints.sqlite3`.
+- **`SqliteSaver` (Persistent CLI & Demo):** `main.py` explicitly attaches a durable `SqliteSaver`
 
-This provides persistent checkpoint storage across process restarts and supports
+  writing to `data/orchestrator_checkpoints.sqlite3`. This provides persistent checkpoint storage
 
-resuming interrupted Human-in-the-Loop placement reviews.
+  across process restarts and supports resuming interrupted Human-in-the-Loop placement reviews.
+
+**Concurrency & Thread Safety:**
+
+- Enabled SQLite Write-Ahead Logging (`PRAGMA journal_mode = WAL`) and a 5-second busy timeout
+
+  (`PRAGMA busy_timeout = 5000`) on all database connections to handle concurrent multi-threaded writes.
+
+- Write iterations take atomic snapshots (`list(self.writes[outer_key].items())`) to prevent dictionary
+
+  mutation errors during concurrent graph node execution.
+
+**Security Boundary Note:** `SqliteSaver` serializes state using Python's `pickle` module. It is
+
+strictly designed for local, trusted filesystem storage. It must never be connected to untrusted SQLite
+
+databases or files received from untrusted external sources.
+
 
 
 
@@ -742,19 +803,38 @@ resuming interrupted Human-in-the-Loop placement reviews.
 
 
 
-`src/tools/db_queries.py` provides privacy-hardened SQLite access. The
+`src/tools/db_queries.py` provides safe, privacy-hardened SQLite operations.
 
-SQL query tool accepts read-only SELECT queries, opens the database in
+**Removal of Arbitrary SQL Tool:**
 
-read-only mode (`mode=ro`), caps returned rows at 5 (`MAX_QUERY_ROWS = 5`),
+To eliminate any risk of SQL injection or unauthorized database browsing, the raw `learner_sql_tool`
 
-enforces an explicit column allowlist, and rejects SQL comments and internal
+has been removed from the agent-facing tool registry. Agents interact exclusively through safe,
 
-metadata queries (`sqlite_master`, `pragma`). For retrieving individual
+parameterized domain tools:
 
-learner profiles, `get_learner_by_id()` uses parameterized queries to enforce
+- `get_learner_by_id_tool`: targeted single-learner lookup enforcing profile isolation.
 
-strict single-learner isolation and prevent cross-learner data exposure.
+- `search_learners_by_track_tool`: parameterized lookup by track name.
+
+- `get_track_aggregate_stats_tool`: aggregate cohort statistics with differential privacy enforcement.
+
+**Differential Privacy & Minimum Cohort Size:**
+
+To prevent learner re-identification in sparse tracks, `get_track_aggregate_stats()` enforces
+
+`MIN_COHORT_SIZE = 3`. If a requested track contains fewer than 3 enrolled learners, the tool
+
+withholds individual metrics, returning `status: "error"` and `privacy_restricted: True`.
+
+**Underlying Query Safeguards:**
+
+The underlying helper opens the database in read-only mode (`mode=ro`), caps returned rows
+
+at 5 (`MAX_QUERY_ROWS = 5`), enforces an explicit column allowlist, and rejects SQL comments and
+
+internal metadata queries (`sqlite_master`, `pragma`).
+
 
 
 
@@ -930,27 +1010,25 @@ Automated tests should use mocks and should not require a live API key.
 
 ## 14. Testing
 
+The test suite contains **57 automated tests** across 8 test suites spanning agent workflows, domain tools, and sandbox execution:
 
+- `tests/test_agents/test_agentic_rag.py` (2 tests): validates Agentic RAG retry behavior and sufficiency stopping.
 
-The test suite contains 34 automated tests across agent workflows and tool layers:
+- `tests/test_agents/test_evaluator_optimizer.py` (2 tests): validates iteration limits and optimization convergence.
 
+- `tests/test_agents/test_orchestrator_evaluator.py` (5 tests): validates LangGraph routing, assessment evaluator routing, and Human-in-the-Loop interrupt/resume cycles.
 
+- `tests/test_agents/test_assessor_agent.py` (4 tests): validates automated unit test runner integration, execution failure handling, fail-closed runner crash abortion, and deterministic assertion failure score capping.
 
-- `tests/test_agents/test_agentic_rag.py`: validates Agentic RAG retry behavior and sufficiency stopping.
+- `tests/test_tools/test_db_queries.py` (14 tests): validates bounded query limits (max 5 rows), column allowlisting, non-SELECT rejection, multi-statement blocking, SQL comment prevention, system table protection, parameterized single-learner isolation, and minimum cohort size (`MIN_COHORT_SIZE = 3`) differential privacy.
 
-- `tests/test_agents/test_evaluator_optimizer.py`: validates iteration limits and optimization convergence.
+- `tests/test_tools/test_test_runner.py` (12 tests): validates test parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` anti-tampering trapping, namespace isolation, and fake metrics delimiter protection.
 
-- `tests/test_agents/test_orchestrator_evaluator.py`: validates LangGraph routing, assessment evaluator routing, and Human-in-the-Loop interrupt/resume cycles.
+- `tests/test_tools/test_sqlite_checkpoint.py` (4 tests): validates cross-instance state persistence, thread isolation, 10-thread concurrent writes with WAL mode, and durable Human-in-the-Loop resumption across simulated process restarts.
 
-- `tests/test_tools/test_db_queries.py`: validates bounded query limits (max 5 rows), column allowlisting, non-SELECT rejection, multi-statement blocking, SQL comment prevention, system table protection, and parameterized single-learner isolation.
-
-- `tests/test_tools/test_docker_executor.py`: validates bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
-
-
+- `tests/test_tools/test_docker_executor.py` (14 tests): validates bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Run the complete test suite:
-
-
 
 ```powershell
 
@@ -958,9 +1036,7 @@ pytest -v
 
 ```
 
-
-
-All 34 tests run in approximately 24 seconds and pass with 100% success. Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`).
+Continuous Integration is automated via GitHub Actions (`.github/workflows/tests.yml`), running on every push and pull request with 100% pass rate.
 
 
 
@@ -1044,7 +1120,7 @@ All 34 tests run in approximately 24 seconds and pass with 100% success. Continu
 
                           tool test suite         integration benchmarks
 
-                          (47 tests passed; CI)
+                          (57 tests passed; CI)
 
 
 

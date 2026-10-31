@@ -16,6 +16,12 @@ class SqliteSaver(InMemorySaver):
     Persists conversation threads, workflow checkpoints, task writes,
     and channel versions to a local SQLite database across application restarts.
     Enables durable Human-in-the-Loop review pausing and resumption.
+
+    Security & Deployment Boundary:
+        - Checkpoints are serialized using standard pickle within a local trusted database.
+        - Database files must not be loaded from untrusted external sources.
+        - For distributed, multi-tenant production clusters, evaluate PostgreSQL checkpointers
+          or signed envelope serialization (e.g. HMAC / JSON).
     """
 
     def __init__(self, db_path: str | Path = "data/orchestrator_checkpoints.sqlite3"):
@@ -26,10 +32,16 @@ class SqliteSaver(InMemorySaver):
         self._init_db()
         self._load_from_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
     def _init_db(self) -> None:
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = self._connect()
             try:
+                conn.execute("PRAGMA journal_mode = WAL")
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS checkpoints (
                         thread_id TEXT,
@@ -57,7 +69,7 @@ class SqliteSaver(InMemorySaver):
 
     def _load_from_db(self) -> None:
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = self._connect()
             try:
                 for row in conn.execute("SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_tuple FROM checkpoints"):
                     t_id, ns, cp_id, cp_data = row
@@ -87,7 +99,7 @@ class SqliteSaver(InMemorySaver):
         cp_id = checkpoint["id"]
 
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = self._connect()
             try:
                 if cp_id in self.storage[thread_id][checkpoint_ns]:
                     data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
@@ -121,10 +133,10 @@ class SqliteSaver(InMemorySaver):
         outer_key = (thread_id, checkpoint_ns, checkpoint_id)
 
         with self._lock:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = self._connect()
             try:
                 if outer_key in self.writes:
-                    for inner_key, write_tuple in self.writes[outer_key].items():
+                    for inner_key, write_tuple in list(self.writes[outer_key].items()):
                         full_key = (outer_key, inner_key)
                         conn.execute(
                             "INSERT OR REPLACE INTO writes VALUES (?, ?)",
