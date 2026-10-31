@@ -833,19 +833,17 @@ parameterized domain tools:
 
 - `search_learners_by_track_tool`: parameterized lookup by track name.
 
-- `get_track_aggregate_stats_tool`: aggregate cohort statistics with minimum cohort suppression (k-anonymity threshold) enforcement.
+- `get_track_aggregate_stats_tool`: aggregate cohort statistics with Minimum Cohort Suppression (`MIN_COHORT_SIZE = 3` threshold) enforcement.
 
-**k-Anonymity Cohort Threshold & Aggregation Privacy:**
+**Minimum Cohort Suppression & Aggregation Privacy:**
 
 To prevent individual learner re-identification in sparse tracks, `get_track_aggregate_stats()` enforces
 
-a k-anonymity cohort threshold (`MIN_COHORT_SIZE = 3`). If a requested track contains fewer than 3 enrolled
+a minimum cohort suppression threshold (`MIN_COHORT_SIZE = 3`). If a requested track contains fewer than 3 enrolled
 
 learners, the tool withholds individual aggregate metrics, returning `status: "error"` and `privacy_restricted: True`.
 
-*Clarification on Privacy Terminology:* This control implements k-anonymity for cohort aggregation. It is distinct
-
-from mathematical ε-differential privacy, which requires injecting calibrated Laplacian or Gaussian noise into output distributions.
+*Clarification on Privacy Terminology:* This control implements Minimum Cohort Suppression (an aggregation threshold heuristic). It is distinct both from mathematical (ε, δ)-differential privacy (which requires injecting calibrated Laplacian or Gaussian noise into output distributions) and formal k-anonymity guarantees against arbitrary auxiliary background information.
 
 **Zero Arbitrary SQL Functions:**
 
@@ -1029,7 +1027,7 @@ Automated tests should use mocks and should not require a live API key.
 
 ## 14. Testing
 
-The test suite contains **112 automated tests** across 13 test suites spanning agent workflows, domain tools, logging, invariant verification, and sandbox execution (111 passing in CI on Ubuntu with Docker, 1 skipped when live Gemini API key is absent):
+The test suite contains **120 automated tests** across 13 test suites spanning agent workflows, domain tools, logging, invariant verification, and sandbox execution (118 passing in CI on Ubuntu with Docker, 2 skipped [Live Gemini API connectivity & Live ChromaDB retrieval benchmark]):
 
 - `tests/test_agents/test_agentic_rag.py` (5 tests): validates Agentic RAG multi-track curriculum coverage, quality scoring, source trust prioritization, out-of-domain detection, and sufficiency retry convergence.
 
@@ -1043,19 +1041,19 @@ The test suite contains **112 automated tests** across 13 test suites spanning a
 
 - `tests/test_agents/test_live_gemini_integration.py` (1 test): validates live Google Gemini API connectivity and structured generation when live credentials are provided.
 
-- `tests/test_tools/test_auth.py` (11 tests): validates PBKDF2-HMAC-SHA256 password hashing with salt, reviewer authentication, shared SQLite brute-force login rate limiting (5 attempts / 15 min), concurrent nonce race condition atomicity, persistent SQLite anti-replay store with fail-closed behavior in production, cryptographic key separation between DB caller secrets (`DB_CALLER_AUTH_SECRET`) and HITL reviewer secrets (`HITL_AUTH_SECRET`), cross-token verification rejection, and JSON external directory configuration.
+- `tests/test_tools/test_auth.py` (15 tests): validates PBKDF2-HMAC-SHA256 password hashing with salt, reviewer authentication, shared SQLite brute-force login rate limiting (5 attempts / 15 min), concurrent nonce race condition atomicity, persistent SQLite anti-replay store with fail-closed behavior in production, cryptographic key separation between DB caller secrets (`DB_CALLER_AUTH_SECRET`) and HITL reviewer secrets (`HITL_AUTH_SECRET`), cross-token verification rejection, adversarial payload tampering detection, replay attack blocking, expired token rejection, and JSON external directory configuration.
 
-- `tests/test_tools/test_db_queries.py` (20 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), cryptographic caller token authorization (`auth_token`), production token enforcement, aggregate query caller authorization, and k-anonymity cohort suppression (`MIN_COHORT_SIZE = 3`) with zero cohort size leakage.
+- `tests/test_tools/test_db_queries.py` (20 tests): validates parameterized single-learner isolation, track searches, max row limits, column allowlisting, SQL injection defense across all domain functions, caller role authorization (`requester_role`), cryptographic caller token authorization (`auth_token`), production token enforcement, aggregate query caller authorization, and Minimum Cohort Suppression (`MIN_COHORT_SIZE = 3` threshold) with zero cohort size leakage.
 
 - `tests/test_tools/test_test_runner.py` (22 tests): validates Master-Worker process isolation (parent harness process never executes untrusted code), concurrent non-blocking select-driven IPC draining loop eliminating OS pipe buffer deadlocks on payloads > 64 KiB, bounded 512 KiB worker IPC payload with explicit SIGKILL worker termination and clean reaping, 64 KiB child assertion bounding, test case parsing, empty code rejection, unverified status emission, combined assertions and stdout execution, full pass and partial failure metrics, compilation error handling, expected stdout matching, `SystemExit` trapping, delimiter spoofing defense, and 9 dedicated adversarial/IPC tests (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` child trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, ctypes neutralization, large payload non-deadlocking IPC verification, and payload overflow SIGKILL handling).
 
-- `tests/test_tools/test_sqlite_checkpoint.py` (12 tests): validates cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, coordinate-bound signature verification preventing cut-and-paste thread swapping, production secret key enforcement, fail-closed anti-downgrade integrity protection (`CheckpointSecurityError`), retention policy purging (`purge_old_checkpoints`), and `SafeCheckpointUnpickler` blocking dangerous RCE gadget modules (`os`, `subprocess`, `sys`, `ctypes`, `eval`).
+- `tests/test_tools/test_sqlite_checkpoint.py` (14 tests): validates cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, 10-thread concurrent writes with WAL mode, simulated process restart resumption, true cross-process persistence spanning separate OS Python processes, cryptographic HMAC disk tampering detection, coordinate-bound signature verification preventing cut-and-paste thread swapping, production secret key enforcement, fail-closed anti-downgrade integrity protection (`CheckpointSecurityError`), retention policy purging (`purge_old_checkpoints`), restricted unpickler blocking dangerous gadgets (`subprocess.Popen`, `exec`, `eval`, `posix.system`, `ctypes`), and immediate database-level detection and rejection of tampered ciphertext payloads.
 
-- `tests/test_tools/test_rag_benchmark.py` (1 test): validates quantitative RAG retrieval benchmarks enforcing Precision @ 3 >= 0.80, Domain Recall = 100%, Groundedness Ratio = 100%, and sub-second retrieval latency (< 1000ms).
+- `tests/test_tools/test_rag_benchmark.py` (2 tests): validates quantitative RAG retrieval benchmarks enforcing Precision @ 3 >= 0.80, Domain Recall = 100%, Factual Grounding Ratio >= 90%, Strict Groundedness >= 90%, and sub-second retrieval latency (< 1000ms), with complete reproducible results committed to `benchmarks/rag_benchmark_report.json`.
 
 - `tests/test_tools/test_logger.py` (2 tests): validates structured JSON log formatting, telemetry attributes, duration tracking, and event emission.
 
-- `tests/test_tools/test_docker_executor.py` (16 tests): validates pinned immutable base image digest (`python:3.10-slim@sha256:6ff50646...`), configurable gVisor (`runsc`) and Kata Containers MicroVM support (`SPRINTS_DOCKER_RUNTIME`), runtime inspection (`get_sandbox_containment_mode`), bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
+- `tests/test_tools/test_docker_executor.py` (17 tests): validates pinned immutable base image digest (`python:3.10-slim@sha256:6ff50646...`), configurable gVisor (`runsc`) and Kata Containers MicroVM support (`SPRINTS_DOCKER_RUNTIME`), runtime parameter sanitization and injection blocking, runtime inspection (`get_sandbox_containment_mode`), bounded 64 KiB streams, empty/invalid submission handling, mock-based timeout and container cleanup, popen exception safety, real container execution, non-zero exit handling, syntax error capture, 5-second runtime timeout enforcement, massive output truncation, read-only root restriction, and network isolation.
 
 Run the complete test suite:
 
@@ -1150,7 +1148,7 @@ Continuous Integration is automated via GitHub Actions (`.github/workflows/tests
 
                           tool test suite         integration benchmarks
 
-                          (112 tests: 111 passed in CI, 1 skipped)
+                          (120 tests: 118 passed in CI, 2 skipped)
 
 
 
@@ -1188,9 +1186,9 @@ approval checkpoint.
 
 The project has a working prototype structure and an extensive passing
 
-test suite (112 automated tests across 13 suites). Its architecture incorporates Master-Worker process isolation,
+test suite (120 automated tests across 13 suites). Its architecture incorporates Master-Worker process isolation,
 
-durable SQLite checkpointing with Fernet AES-128-CBC encryption at rest and coordinate-bound HMAC signatures, PBKDF2 reviewer authentication with brute-force rate limiting, persistent anti-replay nonce storage, and k-anonymity cohort protection. Its current prototype boundaries include the limited project-context
+durable SQLite checkpointing with Fernet AES-128-CBC encryption at rest and coordinate-bound HMAC signatures, PBKDF2 reviewer authentication with brute-force rate limiting, persistent anti-replay nonce storage, and Minimum Cohort Suppression. Its current prototype boundaries include the limited project-context
 
 knowledge base and the absence of live vacancy feeds. These
 

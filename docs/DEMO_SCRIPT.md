@@ -2,7 +2,9 @@
 ## Sprints Multi-Agent AI Career & Assessment Orchestrator
 
 **Target duration:** 3 to 5 minutes  
-**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 112 automated tests across 13 suites (111 passed in CI on Ubuntu with Docker, 1 skipped) and GitHub Actions CI.
+**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 120 automated tests across 13 suites (118 passed in CI on Ubuntu with Docker, 2 skipped [Live Gemini API & Live ChromaDB retrieval]) and GitHub Actions CI.
+
+> **Live vs Deterministic Fallback Notice:** The test runner with master-worker isolation, SQLite parameterized queries, HMAC authentication tokens, and LangGraph checkpoint state interruption/resumption execute 100% live. Gemini LLM inference falls back to deterministic structured outputs when `SPRINTS_LIVE_API` is not configured.
 
 ---
 

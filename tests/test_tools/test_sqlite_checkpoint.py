@@ -393,3 +393,67 @@ def test_safe_checkpoint_unpickler_blocks_dangerous_gadgets():
     with pytest.raises(CheckpointSecurityError) as exc_info:
         safe_checkpoint_loads(malicious_bytes)
     assert "dangerous" in str(exc_info.value).lower() or "blocked" in str(exc_info.value).lower()
+
+
+def test_safe_checkpoint_unpickler_blocks_extended_malicious_gadgets():
+    """Verify SafeCheckpointUnpickler blocks subprocess, builtins.exec, posix, and ctypes gadgets."""
+    import pickle
+    from src.tools.sqlite_checkpoint import safe_checkpoint_loads, CheckpointSecurityError
+
+    class SubprocessExploit:
+        def __reduce__(self):
+            import subprocess
+            return (subprocess.Popen, (["whoami"],))
+
+    class ExecExploit:
+        def __reduce__(self):
+            return (exec, ("import sys; sys.exit(1)",))
+
+    class CtypesExploit:
+        def __reduce__(self):
+            import ctypes
+            return (ctypes.CDLL, ("libc.so.6",))
+
+    for exploit_cls in [SubprocessExploit, ExecExploit, CtypesExploit]:
+        mal_bytes = pickle.dumps(exploit_cls())
+        with pytest.raises(CheckpointSecurityError) as exc_info:
+            safe_checkpoint_loads(mal_bytes)
+        assert "dangerous" in str(exc_info.value).lower() or "blocked" in str(exc_info.value).lower()
+
+
+def test_sqlite_checkpoint_tampered_ciphertext_rejected(tmp_path):
+    """Verify that tampering with raw bytes in the checkpoints table causes safe verification failure."""
+    import sqlite3
+    from src.tools.sqlite_checkpoint import SqliteSaver, CheckpointSecurityError
+    from langgraph.graph import StateGraph
+
+    db_file = tmp_path / "tamper_test.sqlite3"
+    saver = SqliteSaver(db_file, secret_key="secure-key-for-tamper-testing-2026")
+
+    builder = StateGraph(dict)
+    builder.add_node("step", lambda s: {"data": "verified_original"})
+    builder.set_entry_point("step")
+    builder.set_finish_point("step")
+    graph = builder.compile(checkpointer=saver)
+
+    cfg = {"configurable": {"thread_id": "thread-tamper-target"}}
+    graph.invoke({"data": "init"}, config=cfg)
+
+    # Tamper with the raw encrypted blob in the database
+    with sqlite3.connect(db_file) as conn:
+        cursor = conn.execute("SELECT checkpoint_tuple FROM checkpoints WHERE thread_id = 'thread-tamper-target'")
+        raw_blob = bytearray(cursor.fetchone()[0])
+        # Corrupt bytes in the middle of the payload
+        raw_blob[len(raw_blob) // 2] ^= 0xFF
+        conn.execute(
+            "UPDATE checkpoints SET checkpoint_tuple = ? WHERE thread_id = 'thread-tamper-target'",
+            (bytes(raw_blob),),
+        )
+        conn.commit()
+
+    # Opening checkpointer or reading state must immediately detect tampering and fail via CheckpointSecurityError
+    with pytest.raises(CheckpointSecurityError) as exc_info:
+        saver2 = SqliteSaver(db_file, secret_key="secure-key-for-tamper-testing-2026")
+        graph2 = builder.compile(checkpointer=saver2)
+        graph2.get_state(cfg)
+    assert "integrity" in str(exc_info.value).lower() or "signature mismatch" in str(exc_info.value).lower() or "decryption" in str(exc_info.value).lower()

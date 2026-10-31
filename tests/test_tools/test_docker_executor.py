@@ -10,6 +10,7 @@ from src.tools.docker_executor import (
     MAX_OUTPUT_BYTES,
     _read_limited,
     execute_in_docker,
+    get_sandbox_containment_mode,
 )
 
 
@@ -252,3 +253,22 @@ def test_docker_command_includes_runtime_flag_when_configured(monkeypatch):
         assert "--runtime" in cmd_called
         idx = cmd_called.index("--runtime")
         assert cmd_called[idx + 1] == "runsc"
+
+
+def test_docker_runtime_blocks_option_injection_and_invalid_names(monkeypatch):
+    """Verify adversarial runtime injection attempts (--privileged, semicolons, shell metacharacters) are rejected."""
+    # Attempt flag injection via SPRINTS_DOCKER_RUNTIME
+    monkeypatch.setenv("SPRINTS_DOCKER_RUNTIME", "--privileged")
+    res1 = execute_in_docker("print('adversarial')")
+    assert res1["status"] == "error"
+    assert "Security violation" in res1["error"]
+    assert "illegal container runtime parameter" in res1["error"]
+
+    info1 = get_sandbox_containment_mode()
+    assert info1["runtime"] == "invalid_sanitized"
+
+    # Attempt shell command chaining injection
+    monkeypatch.setenv("SPRINTS_DOCKER_RUNTIME", "runsc; rm -rf /")
+    res2 = execute_in_docker("print('adversarial')")
+    assert res2["status"] == "error"
+    assert "Security violation" in res2["error"]

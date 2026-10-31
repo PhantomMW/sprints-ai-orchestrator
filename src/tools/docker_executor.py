@@ -5,6 +5,7 @@ from typing import Any
 
 
 import os
+import re
 
 # Base image reference for reproducible sandbox builds (supports sha256 digest pinning via SPRINTS_BASE_IMAGE)
 DEFAULT_SANDBOX_IMAGE = "sprints-python-sandbox:latest"
@@ -23,6 +24,8 @@ def get_sandbox_containment_mode() -> dict[str, Any]:
         - Standard Linux Container (runc): Standard cgroups/namespaces isolation.
     """
     runtime = os.getenv("SPRINTS_DOCKER_RUNTIME", DOCKER_RUNTIME).strip()
+    if runtime and (not re.match(r"^[a-zA-Z0-9_\-\.]+$", runtime) or runtime.startswith("-")):
+        runtime = "invalid_sanitized"
     if runtime in ("runsc", "gvisor"):
         mode = "microvm_gvisor"
         desc = "gVisor user-space kernel sandbox (runsc) providing multi-tenant syscall interception"
@@ -128,6 +131,15 @@ def execute_in_docker(code: str) -> dict[str, Any]:
         container_name,
     ]
     if active_runtime:
+        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", active_runtime) or active_runtime.startswith("-"):
+            return {
+                "status": "error",
+                "stdout": "",
+                "stderr": "",
+                "error": f"Security violation: Malicious or illegal container runtime parameter: '{active_runtime}'.",
+                "exit_code": None,
+                "output_truncated": False,
+            }
         command.extend(["--runtime", active_runtime])
 
     command.extend([

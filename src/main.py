@@ -117,7 +117,9 @@ assert calculate_metrics([]) == (0, 0)
     print("\nPrivacy & Governance Controls:")
     print("  - Single-learner lookups use parameterized SQL with cryptographic caller tokens")
     print("  - Bulk queries enforce MAX_QUERY_ROWS = 5 and column projection filters")
-    print("  - Aggregation queries enforce Minimum Cohort Threshold (MIN_COHORT_SIZE = 3, k-anonymity suppression)")
+    print("  - Aggregation queries enforce Minimum Cohort Suppression (MIN_COHORT_SIZE = 3 threshold)")
+    print("  - Live execution: Python test runner, SQLite lookups, HMAC tokens, and LangGraph checkpoint state")
+    print("  - Fallback mode: Gemini LLM inference operates deterministically offline when SPRINTS_LIVE_API is unset")
 
     # -------------------------------------------------------------------------
     # STAGE 3: Evaluator-Optimizer Quality Assurance Loop & Invariant Guard

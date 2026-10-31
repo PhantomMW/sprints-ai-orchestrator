@@ -1,0 +1,303 @@
+{
+  "benchmark_timestamp": "2026-10-31T23:27:16Z",
+  "total_queries": 6,
+  "k_eval": 3,
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "vector_store": "ChromaDB (PersistentClient)",
+  "mean_precision_at_k": 1.0,
+  "domain_recall": 1.0,
+  "provenance_ratio": 1.0,
+  "factual_grounding_ratio": 1.0,
+  "strict_groundedness_ratio": 1.0,
+  "mean_latency_ms": 12.64,
+  "domains_covered": [
+    "Agentic RAG & Knowledge Self-Reflection",
+    "Evaluator-Optimizer & Quality Acceptance Criteria",
+    "Human-in-the-Loop Governance & Escalation",
+    "LangGraph Orchestration & StateGraph",
+    "Learner Database & Career Placement Queries",
+    "Secure Python Assessment & Sandbox"
+  ],
+  "details": [
+    {
+      "query": "LangGraph multi-agent orchestration StateGraph dynamic routing and agent state",
+      "domain": "LangGraph Orchestration & StateGraph",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 13.72,
+      "retrieved_docs": [
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "dynamic routing",
+            "orchestrat"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 5\n\nQuality bar\n\n• The system must use LangGraph for all multi-agent orchestration, avoiding deprecated linear chains for dynamic ro..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "dynamic routing",
+            "orchestrat"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "### Acceptance Criteria\n\n- The system must use LangGraph for all multi-agent orchestration, avoiding deprecated linear chains for dynamic ro..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "stategraph",
+            "orchestrat",
+            "typeddict",
+            "state"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "| LangGraph | [Sprint 2] Architect a unified StateGraph orchestration pipeline defining a global `TypedDict` state that routes incoming Spri..."
+        }
+      ]
+    },
+    {
+      "query": "secure Python code execution sandbox REPL timeout stdout capture and grading",
+      "domain": "Secure Python Assessment & Sandbox",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 13.44,
+      "retrieved_docs": [
+        {
+          "source": "client_discovery_call.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "repl",
+            "sandbox",
+            "grad"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "[00:35] We have two non-negotiable constraints you need to build around: \n\n[00:39] First, the architecture must run on a unified LangGraph S..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "grad"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "### Expected Deliverables\n\n- Shareable GitHub repository or workspace link containing all Python source code, Jupyter evaluation notebooks, ..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "grad"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "### Business Situation\n\nWelcome to Sprints, the premier EdTech platform bridging the talent gap in the MENA region. We are currently scaling..."
+        }
+      ]
+    },
+    {
+      "query": "Human-in-the-Loop review tier-1 partner Fawry placement escalation interrupt",
+      "domain": "Human-in-the-Loop Governance & Escalation",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 12.32,
+      "retrieved_docs": [
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "human-in-the-loop",
+            "hitl",
+            "tier-1",
+            "fawry",
+            "interrupt",
+            "escalat"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "| LangGraph | [Sprint 2] Develop a Human-in-the-Loop (HITL) feedback escalation workflow using LangGraph's interrupt primitive, which pauses..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "human-in-the-loop",
+            "hitl",
+            "escalat"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "This project requires a sophisticated orchestrator-worker architecture. You will leverage foundational chaining and prompt engineering, alon..."
+        },
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "human-in-the-loop",
+            "hitl",
+            "interrupt",
+            "escalat"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 4\n\nWhat we need from you (2/2)\n\n• {\"requirement\": \"[Sprint 2] Build an Agentic RAG workflow inside the Advisor Agent node that feat..."
+        }
+      ]
+    },
+    {
+      "query": "sprints learner database target salary EGP completed modules preferred employers",
+      "domain": "Learner Database & Career Placement Queries",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 11.94,
+      "retrieved_docs": [
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "sprints_learner_db",
+            "salary",
+            "egp",
+            "module",
+            "learner",
+            "employer"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "| Technology | Requirement |\n|---|---|\n| LangChain | [Sprint 1] Implement a complete Document Ingestion and Vectorization pipeline that load..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "salary",
+            "egp",
+            "learner",
+            "employer"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "### Business Situation\n\nWelcome to Sprints, the premier EdTech platform bridging the talent gap in the MENA region. We are currently scaling..."
+        },
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "salary",
+            "egp",
+            "learner",
+            "employer"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 2\n\nThe business situation\n\n• Welcome to Sprints, the premier EdTech platform bridging the talent gap in the MENA region. We are cur..."
+        }
+      ]
+    },
+    {
+      "query": "Agentic RAG ChromaDB curriculum chunking self-reflection query reformulation",
+      "domain": "Agentic RAG & Knowledge Self-Reflection",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 12.35,
+      "retrieved_docs": [
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "self-reflection",
+            "reformulat",
+            "retriev"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "| LangGraph | [Sprint 2] Architect a unified StateGraph orchestration pipeline defining a global `TypedDict` state that routes incoming Spri..."
+        },
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "chromadb",
+            "chunk",
+            "retriev"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "| Technology | Requirement |\n|---|---|\n| LangChain | [Sprint 1] Implement a complete Document Ingestion and Vectorization pipeline that load..."
+        },
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "self-reflection"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 4\n\nWhat we need from you (2/2)\n\n• {\"requirement\": \"[Sprint 2] Build an Agentic RAG workflow inside the Advisor Agent node that feat..."
+        }
+      ]
+    },
+    {
+      "query": "Evaluator-Optimizer refinement iterations latency acceptance criteria rubric",
+      "domain": "Evaluator-Optimizer & Quality Acceptance Criteria",
+      "retrieved_k": 3,
+      "relevant_count": 3,
+      "precision": 1.0,
+      "latency_ms": 12.05,
+      "retrieved_docs": [
+        {
+          "source": "project_brief.md",
+          "trust_level": "high",
+          "matched_facts": [
+            "evaluator",
+            "optimizer",
+            "refinement iteration",
+            "criteria",
+            "latency"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "### Acceptance Criteria\n\n- The system must use LangGraph for all multi-agent orchestration, avoiding deprecated linear chains for dynamic ro..."
+        },
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "evaluator",
+            "optimizer",
+            "refinement iteration",
+            "latency"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 5\n\nQuality bar\n\n• The system must use LangGraph for all multi-agent orchestration, avoiding deprecated linear chains for dynamic ro..."
+        },
+        {
+          "source": "client_kickoff_deck.md",
+          "trust_level": "medium",
+          "matched_facts": [
+            "evaluator",
+            "optimizer"
+          ],
+          "is_factually_grounded": true,
+          "has_provenance": true,
+          "snippet": "## Slide 4\n\nWhat we need from you (2/2)\n\n• {\"requirement\": \"[Sprint 2] Build an Agentic RAG workflow inside the Advisor Agent node that feat..."
+        }
+      ]
+    }
+  ]
+}

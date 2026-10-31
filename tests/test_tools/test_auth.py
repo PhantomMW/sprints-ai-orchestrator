@@ -214,3 +214,82 @@ def test_auth_external_reviewers_json_configuration(monkeypatch):
     ok, msg, info = authenticate_reviewer("external_director", "EnterpriseSecure2026!")
     assert ok is True
     assert info["role"] == "placement_director"
+
+
+def test_adversarial_db_token_rejected_as_hitl_reviewer_token():
+    """Verify that a database caller token cannot be used to forge human placement review authorization."""
+    # Issue a valid DB caller token
+    db_token = generate_caller_token("advisor_agent", "advisor")
+
+    # Present this token to the HITL reviewer verification endpoint
+    decision = {
+        "action": "approved",
+        "reviewer": "sarah_lead",
+        "auth_token": db_token,
+    }
+    authenticated, reason, audit = verify_reviewer_auth(decision, thread_id="thread-cross-token-attack")
+
+    assert authenticated is False
+    assert "SIGNATURE_MISMATCH" in audit.get("error_code", "") or "signature verification failed" in reason.lower()
+
+
+def test_adversarial_tampered_payload_signature_mismatch():
+    """Verify that any modification to token payload (e.g. elevating role) is detected and rejected."""
+    import base64
+    import json
+
+    # Generate a legitimate token for a standard advisor
+    valid_token = generate_reviewer_token("sarah_lead", role="lead_career_advisor")
+    b64_payload, signature = valid_token.split(".")
+
+    # Adversary decodes payload, elevates role to director, re-encodes without valid secret
+    payload = json.loads(base64.urlsafe_b64decode(b64_payload.encode("utf-8")).decode("utf-8"))
+    payload["role"] = "placement_director"
+    tampered_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+    tampered_token = f"{tampered_b64}.{signature}"
+
+    decision = {
+        "action": "approved",
+        "reviewer": "sarah_lead",
+        "auth_token": tampered_token,
+    }
+    authenticated, reason, audit = verify_reviewer_auth(decision, thread_id="thread-tamper-attack")
+
+    assert authenticated is False
+    assert audit.get("error_code") == "SIGNATURE_MISMATCH"
+
+
+def test_adversarial_replay_attack_rejected_by_store(tmp_path):
+    """Verify that reusing a legitimate token is rejected as a replay attack."""
+    db_file = tmp_path / "replay_store.sqlite3"
+    custom_store = PersistentNonceStore(db_file)
+
+    token = generate_reviewer_token("sarah_lead", role="lead_career_advisor")
+    decision = {
+        "action": "approved",
+        "reviewer": "sarah_lead",
+        "auth_token": token,
+    }
+
+    # First attempt: successfully authenticated and nonce consumed
+    auth1, _, _ = verify_reviewer_auth(decision, thread_id="t1", nonce_store=custom_store)
+    assert auth1 is True
+
+    # Second attempt: replay attack detected and blocked
+    auth2, reason2, audit2 = verify_reviewer_auth(decision, thread_id="t2", nonce_store=custom_store)
+    assert auth2 is False
+    assert audit2.get("error_code") == "REPLAY_ATTACK_DETECTED"
+    assert "Anti-replay protection violation" in reason2
+
+
+def test_adversarial_expired_hitl_token_rejected():
+    """Verify that an expired token cannot be used to authorize placement."""
+    expired_token = generate_reviewer_token("sarah_lead", role="lead_career_advisor", expires_in_seconds=-60)
+    decision = {
+        "action": "approved",
+        "reviewer": "sarah_lead",
+        "auth_token": expired_token,
+    }
+    authenticated, reason, audit = verify_reviewer_auth(decision, thread_id="t-expired")
+    assert authenticated is False
+    assert audit.get("error_code") == "TOKEN_EXPIRED"
