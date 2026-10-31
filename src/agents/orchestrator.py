@@ -8,6 +8,7 @@ from langgraph.types import interrupt
 
 from src.agents.advisor_agent import generate_career_advice
 from src.agents.assessor_agent import assess_python_code
+from src.utils.auth import generate_caller_token
 from src.agents.evaluator_optimizer import evaluate_and_optimize
 from src.state import AgentState
 from src.tools.sqlite_checkpoint import SqliteSaver
@@ -79,7 +80,9 @@ def advisor_node(state: AgentState) -> dict:
             "messages": [AIMessage(content=response)],
         }
 
-    result = generate_career_advice(student_id)
+    # Generate cryptographic caller token in trusted orchestration boundary (outside LLM)
+    service_token = generate_caller_token("orchestrator_advisor_node", "advisor")
+    result = generate_career_advice(student_id, caller_token=service_token)
 
     if result.get("status") != "success":
         response = result.get(

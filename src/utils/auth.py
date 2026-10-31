@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import secrets
 import threading
 import time
 import uuid
@@ -90,6 +91,18 @@ class PersistentNonceStore:
                     CREATE INDEX IF NOT EXISTS idx_nonces_expires 
                     ON consumed_nonces (expires_at)
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS login_attempts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT NOT NULL,
+                        attempted_at REAL NOT NULL,
+                        success INTEGER NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_login_attempts_user_time 
+                    ON login_attempts (username, attempted_at)
+                """)
                 conn.commit()
         except Exception as e:
             app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
@@ -143,14 +156,69 @@ class PersistentNonceStore:
                 return True
 
     def reset(self) -> None:
-        """Reset the nonce store (used primarily for test isolation)."""
+        """Reset the nonce store and rate limit records (used primarily for test isolation)."""
         with self._lock:
             self._memory_fallback.clear()
             try:
                 if self.db_path.exists():
                     with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
                         conn.execute("DELETE FROM consumed_nonces")
+                        conn.execute("DELETE FROM login_attempts")
                         conn.commit()
+            except Exception:
+                pass
+
+    def record_login_attempt(self, username: str, success: bool) -> None:
+        """Record a login attempt persistently for cross-worker rate limiting."""
+        clean_user = username.strip().casefold()
+        now = time.time()
+        with self._lock:
+            try:
+                with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                    conn.execute(
+                        "INSERT INTO login_attempts (username, attempted_at, success) VALUES (?, ?, ?)",
+                        (clean_user, now, 1 if success else 0),
+                    )
+                    if success:
+                        conn.execute("DELETE FROM login_attempts WHERE username = ? AND success = 0", (clean_user,))
+                    conn.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (now - 86400,))
+                    conn.commit()
+            except Exception:
+                pass
+
+    def check_login_rate_limit(self, username: str) -> tuple[bool, int]:
+        """
+        Check whether an account is locked out across all workers.
+        Returns (is_locked, remaining_seconds).
+        """
+        clean_user = username.strip().casefold()
+        now = time.time()
+        window_start = now - LOGIN_LOCKOUT_WINDOW_SECONDS
+        with self._lock:
+            try:
+                with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                    cursor = conn.execute(
+                        "SELECT attempted_at FROM login_attempts WHERE username = ? AND success = 0 AND attempted_at > ? ORDER BY attempted_at ASC",
+                        (clean_user, window_start),
+                    )
+                    attempts = [row[0] for row in cursor.fetchall()]
+                    if len(attempts) >= MAX_FAILED_LOGIN_ATTEMPTS:
+                        remaining = int(LOGIN_LOCKOUT_WINDOW_SECONDS - (now - attempts[0]))
+                        return True, max(1, remaining)
+            except Exception:
+                pass
+        return False, 0
+
+    def reset_login_attempts(self, username: str | None = None) -> None:
+        """Reset persistent login attempt records for a specific user or all users."""
+        with self._lock:
+            try:
+                with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                    if username:
+                        conn.execute("DELETE FROM login_attempts WHERE username = ?", (username.strip().casefold(),))
+                    else:
+                        conn.execute("DELETE FROM login_attempts")
+                    conn.commit()
             except Exception:
                 pass
 
@@ -185,11 +253,11 @@ def get_authorized_reviewers() -> set[str]:
 # ==============================================================================
 
 def hash_password(password: str, salt: str | None = None) -> str:
-    """Hash a password using PBKDF2-HMAC-SHA256 with 100,000 iterations."""
-    salt_bytes = (salt or uuid.uuid4().hex).encode("utf-8")
+    """Hash a password using PBKDF2-HMAC-SHA256 with 100,000 iterations and cryptographically secure random salt."""
+    salt_str = salt or secrets.token_hex(16)
+    salt_bytes = salt_str.encode("utf-8")
     pwd_bytes = password.encode("utf-8")
     derived = hashlib.pbkdf2_hmac("sha256", pwd_bytes, salt_bytes, 100000)
-    salt_str = salt_bytes.decode("utf-8")
     derived_hex = derived.hex()
     return f"pbkdf2:sha256:100000${salt_str}${derived_hex}"
 
@@ -212,14 +280,11 @@ def verify_password(password: str, hashed_str: str) -> bool:
 # Rate limiting and lockout state for human reviewer authentication
 MAX_FAILED_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_WINDOW_SECONDS = 900  # 15 minutes lockout window
-_FAILED_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
-_RATE_LIMIT_LOCK = threading.Lock()
 
 
 def reset_login_rate_limits() -> None:
-    """Reset the login rate limit tracking state (primarily for test isolation)."""
-    with _RATE_LIMIT_LOCK:
-        _FAILED_LOGIN_ATTEMPTS.clear()
+    """Reset the persistent shared login rate limit tracking state across all workers."""
+    _GLOBAL_NONCE_STORE.reset_login_attempts()
 
 
 # Pre-hashed institutional reviewer credentials (PBKDF2-HMAC-SHA256, 100,000 rounds)
@@ -285,44 +350,35 @@ def get_registered_reviewers() -> dict[str, dict[str, str]]:
 def authenticate_reviewer(username: str, password: str) -> tuple[bool, str, dict[str, Any]]:
     """
     Authenticate a human reviewer using verified credentials before issuing a session token.
-    Applies sliding-window rate limiting to resist brute-force password guessing attacks.
+    Applies persistent SQLite-backed rate limiting shared across all workers and processes.
     
     Returns:
         (is_authenticated, reason, reviewer_info)
     """
     clean_user = username.strip().casefold()
-    now = time.time()
 
-    # 1. Rate limiting check (anti brute-force)
-    with _RATE_LIMIT_LOCK:
-        attempts = _FAILED_LOGIN_ATTEMPTS.get(clean_user, [])
-        recent_attempts = [t for t in attempts if now - t < LOGIN_LOCKOUT_WINDOW_SECONDS]
-        _FAILED_LOGIN_ATTEMPTS[clean_user] = recent_attempts
-
-        if len(recent_attempts) >= MAX_FAILED_LOGIN_ATTEMPTS:
-            remaining_lockout = int(LOGIN_LOCKOUT_WINDOW_SECONDS - (now - recent_attempts[0]))
-            return (
-                False,
-                f"Account temporarily locked due to excessive failed attempts. Try again in {remaining_lockout}s.",
-                {},
-            )
+    # 1. Multi-worker persistent rate limiting check (anti brute-force)
+    is_locked, remaining = _GLOBAL_NONCE_STORE.check_login_rate_limit(clean_user)
+    if is_locked:
+        return (
+            False,
+            f"Account temporarily locked due to excessive failed attempts. Try again in {remaining}s.",
+            {},
+        )
 
     reviewers_dir = get_registered_reviewers()
     user_record = reviewers_dir.get(clean_user)
 
     if not user_record:
-        with _RATE_LIMIT_LOCK:
-            _FAILED_LOGIN_ATTEMPTS.setdefault(clean_user, []).append(now)
+        _GLOBAL_NONCE_STORE.record_login_attempt(clean_user, success=False)
         return False, f"Reviewer '{username}' not registered in institutional directory.", {}
 
     if not verify_password(password, user_record["password_hash"]):
-        with _RATE_LIMIT_LOCK:
-            _FAILED_LOGIN_ATTEMPTS.setdefault(clean_user, []).append(now)
+        _GLOBAL_NONCE_STORE.record_login_attempt(clean_user, success=False)
         return False, "Invalid reviewer password or credentials.", {}
 
-    # Successful authentication: clear failed attempts
-    with _RATE_LIMIT_LOCK:
-        _FAILED_LOGIN_ATTEMPTS.pop(clean_user, None)
+    # Successful authentication: record success and clear lockout history
+    _GLOBAL_NONCE_STORE.record_login_attempt(clean_user, success=True)
 
     return True, "Reviewer credentials authenticated successfully.", {
         "reviewer_id": username.strip(),

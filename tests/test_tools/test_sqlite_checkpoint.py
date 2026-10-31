@@ -363,3 +363,18 @@ def test_sqlite_checkpoint_fernet_encryption_at_rest(tmp_path):
     graph2 = builder.compile(checkpointer=saver2)
     state = graph2.get_state(cfg)
     assert state.values["val"] == "secret-student-data-42"
+
+def test_sqlite_checkpoint_anti_downgrade_in_production(tmp_path, monkeypatch):
+    """Verify that in production, encryption downgrade or cipher unavailability raises CheckpointSecurityError."""
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.setenv("CHECKPOINT_SECRET_KEY", "prod-secure-encryption-key-for-test-123456789")
+    db_file = tmp_path / "downgrade_test.sqlite3"
+
+    from src.tools.sqlite_checkpoint import CheckpointSecurityError
+    saver = SqliteSaver(db_file)
+    
+    # Simulate missing cipher in production
+    saver._cipher = None
+    with pytest.raises(CheckpointSecurityError) as excinfo:
+        saver._encrypt(b"secret-payload")
+    assert "encryption at rest is mandatory in production" in str(excinfo.value).lower()

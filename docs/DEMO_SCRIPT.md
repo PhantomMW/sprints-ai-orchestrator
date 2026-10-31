@@ -2,7 +2,7 @@
 ## Sprints Multi-Agent AI Career & Assessment Orchestrator
 
 **Target duration:** 3 to 5 minutes  
-**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 95 automated tests across 12 suites (94 passed in CI, 1 skipped) and GitHub Actions CI.
+**Demo mode:** Local interactive / automated CLI demo (`python src/main.py --mode demo` or `--mode interactive`). Automated test suite (`pytest -v`) with 98 automated tests across 12 suites (97 passed in CI, 1 skipped) and GitHub Actions CI.
 
 ---
 
@@ -108,15 +108,15 @@ This guarantees that AI never commits placement promises autonomously without in
 
 ## 3:45–4:15 | Automated Verification Suite & CI / CD (95 Tests: 94 Passed, 1 Skipped in CI)
 
-"To prove engineering reliability, the repository features an automated test suite with **95 comprehensive tests** across 12 test suites:
+"To prove engineering reliability, the repository features an automated test suite with **98 comprehensive tests** across 12 test suites:
 - `test_db_queries.py`: 20 tests verifying row bounds, projection filters, parameterization, caller token cryptographic verification, caller role authorization (`requester_role`), production token enforcement, aggregate query caller authorization, suppression count masking, and SQL injection resistance.
 - `test_auth.py`: 8 tests verifying PBKDF2-HMAC-SHA256 password hashing with salt, reviewer login authentication, brute-force login rate limiting (5 attempts / 15 min), concurrent nonce race condition atomicity, persistent SQLite anti-replay store with fail-closed behavior in production, production secret enforcement, and database caller tokens.
 - `test_e2e_integration.py`: 2 tests asserting complete end-to-end multi-agent workflow: signed caller token DB lookup, Career Advisor RAG retrieval, Evaluator-Optimizer loop, conditional HITL review interrupt, human reviewer PBKDF2 login, HMAC session token issuance, graph resumption, and durable SQLite checkpoint restoration across instances.
-- `test_test_runner.py`: 19 tests asserting master-worker process isolation (parent harness process never executes untrusted code), bounded 512 KiB worker IPC payload, test case parsing, compilation error trapping, OS process isolation (`os.fork()`), delimiter protection, and 6 adversarial tampering defenses (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, and ctypes neutralization).
-- `test_sqlite_checkpoint.py`: 10 tests ensuring cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, WAL concurrency, cross-process durability, HMAC tamper detection, coordinate-bound signature verification preventing thread swapping, production secret key enforcement, and retention pruning.
+- `test_test_runner.py`: 20 tests asserting master-worker process isolation (parent harness process never executes untrusted code), concurrent non-blocking select-driven pipe draining eliminating OS pipe deadlocks on payloads > 64 KiB, bounded 512 KiB worker IPC payload, test case parsing, compilation error trapping, OS process isolation (`os.fork()`), delimiter protection, and 7 adversarial/IPC tampering defenses (monkey-patching `os.fork`/`os.waitpid`, `os._exit()` trapping, builtins corruption immunity, frame inspection defense, learner code suicide trapping, ctypes neutralization, and large IPC payload verification).
+- `test_sqlite_checkpoint.py`: 11 tests ensuring cross-instance state persistence, Fernet AES-128-CBC authenticated encryption at rest, thread isolation, WAL concurrency, cross-process durability, HMAC tamper detection, coordinate-bound signature verification preventing thread swapping, production secret key enforcement, fail-closed anti-downgrade integrity protection (`CheckpointSecurityError`), and retention pruning.
 - `test_agentic_rag.py`: 5 tests verifying self-reflective query reformulation, retrieval bounds, multi-track curriculum coverage, source trust prioritization, and out-of-domain detection.
 - `test_docker_executor.py`: 14 tests validating pinned immutable base image digest (`python:3.10-slim@sha256:6ff50646...`), 64 KiB truncation, timeout enforcement, non-root user, read-only storage, and process failure recovery.
-- `test_orchestrator_evaluator.py`: 8 tests verifying end-to-end graph routing, loop caps, HITL interrupts, cryptographic HMAC reviewer authentication, signature verification, and anti-replay defense.
+- `test_orchestrator_evaluator.py`: 9 tests verifying end-to-end graph routing, loop caps, HITL interrupts, cryptographic HMAC reviewer authentication, signature verification, anti-replay defense, and cryptographic caller token injection in advisor_node.
 - `test_assessor_agent.py`: 4 tests verifying fail-closed error handling and scoring guardrails against failing unit tests.
 - `test_evaluator_optimizer.py`: 2 tests verifying optimization loop bounds and quality metrics.
 - `test_logger.py`: 2 tests verifying structured JSON logging and telemetry.
@@ -144,7 +144,7 @@ Before presenting, ensure:
 - [ ] Virtual environment active: `.\.venv\Scripts\activate`
 - [ ] Docker Desktop running with Linux engine: `docker info`
 - [ ] Sandbox image built: `docker images sprints-python-sandbox:latest`
-- [ ] Run full test suite: `pytest -v` (verify 95 tests collected: 71 passed locally, 24 skipped for Docker/Live API)
+- [ ] Run full test suite: `pytest -v` (verify 98 tests collected: 73 passed locally, 25 skipped for Docker/Live API)
 - [ ] Run automated demo: `python src/main.py --mode demo`
 - [ ] Run interactive mode (optional): `python src/main.py --mode interactive`
 - [ ] Verify `SYN-DEMO-01` synthetic profile is loaded with zero personal data leakage.

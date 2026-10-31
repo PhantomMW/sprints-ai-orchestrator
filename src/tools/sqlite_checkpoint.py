@@ -69,6 +69,10 @@ class SqliteSaver(InMemorySaver):
             self._cipher = Fernet(self._fernet_key)
         else:
             self._cipher = None
+            if app_env in ("production", "prod", "staging"):
+                raise CheckpointSecurityError(
+                    "FATAL: cryptography library (Fernet) is mandatory in production environments to enforce at-rest checkpoint encryption."
+                )
         self._lock = threading.Lock()
         self._init_db()
         self._load_from_db()
@@ -77,15 +81,30 @@ class SqliteSaver(InMemorySaver):
         """Encrypt serialized bytes at rest using AES-CBC/HMAC Fernet cipher."""
         if self._cipher:
             return self._cipher.encrypt(data)
+        app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+        if app_env in ("production", "prod", "staging"):
+            raise CheckpointSecurityError(
+                "FATAL: Checkpoint encryption at rest is mandatory in production environments."
+            )
         return data
 
     def _decrypt(self, data: bytes) -> bytes:
-        """Decrypt binary blob from storage; fallback to raw data if unencrypted for backward compatibility."""
+        """Decrypt binary blob from storage; enforces decryption in production without silent plaintext fallback."""
         if self._cipher:
             try:
                 return self._cipher.decrypt(data)
-            except Exception:
+            except Exception as e:
+                app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+                if app_env in ("production", "prod", "staging"):
+                    raise CheckpointSecurityError(
+                        f"FATAL: Checkpoint decryption failed in production: {e}"
+                    )
                 return data
+        app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+        if app_env in ("production", "prod", "staging"):
+            raise CheckpointSecurityError(
+                "FATAL: Checkpoint encryption at rest is mandatory in production environments."
+            )
         return data
 
     def _sign(self, data: bytes, context_prefix: str = "") -> str:

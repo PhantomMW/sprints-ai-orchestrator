@@ -320,3 +320,21 @@ large_str = generate_output()
     assert res["status"] == "success"
     assert res["total"] == 1
     assert res["passed"] == 1
+
+@requires_docker
+def test_worker_large_ipc_payload_no_deadlock():
+    """Verify that worker writing > 128 KB of output does NOT deadlock the pipe."""
+    # 150 KB output: larger than Linux default 64 KB pipe buffer
+    code = """
+import sys
+# Generate 150 KB of stdout
+sys.stdout.write("X" * (150 * 1024))
+
+def compute():
+    return 100
+"""
+    suite = "assert compute() == 100"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["total"] == 1
+    assert res["passed"] == 1

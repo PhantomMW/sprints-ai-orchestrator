@@ -109,6 +109,9 @@ import os
 import sys
 import io
 import json
+import time
+import select
+import signal
 
 # Bind safe primitive functions directly before untrusted code can monkey-patch them
 _safe_fork = getattr(os, "fork", None)
@@ -116,16 +119,21 @@ _safe_waitpid = getattr(os, "waitpid", None)
 _safe_pipe = getattr(os, "pipe", None)
 _safe_close = getattr(os, "close", None)
 _safe_write = getattr(os, "write", None)
+_safe_read = getattr(os, "read", None)
+_safe_kill = getattr(os, "kill", None)
 _safe_exit = getattr(os, "_exit", None)
 _safe_WIFEXITED = getattr(os, "WIFEXITED", None)
 _safe_WEXITSTATUS = getattr(os, "WEXITSTATUS", None)
 _safe_fdopen = getattr(os, "fdopen", None)
+_safe_select = getattr(select, "select", None)
+_safe_time = time.time
+_safe_SIGKILL = getattr(signal, "SIGKILL", 9)
 
 _safe_StringIO = io.StringIO
 _safe_BaseException = BaseException
 _safe_orig_stdout = sys.stdout
 _safe_json_dumps = json.dumps
-_safe_has_fork = callable(_safe_fork) and callable(_safe_waitpid) and callable(_safe_pipe) and callable(_safe_exit)
+_safe_has_fork = callable(_safe_fork) and callable(_safe_waitpid) and callable(_safe_pipe) and callable(_safe_exit) and callable(_safe_select) and callable(_safe_read)
 
 # Neutralize stack introspection vectors to prevent student code from walking/clearing parent frames
 for _attr in ("_getframe", "_current_frames"):
@@ -227,10 +235,38 @@ if _safe_has_fork:
                             _safe_exit(2)
                     else:
                         _safe_close(_c_w_fd)
-                        _, _c_status = _safe_waitpid(_c_pid, 0)
-                        with _safe_fdopen(_c_r_fd, "rb") as _rf:
-                            # Bound assertion IPC payload to 64 KB to prevent memory exhaustion
-                            _pipe_out = _rf.read(64 * 1024).decode("utf-8", "replace")
+                        # Concurrently drain assertion IPC pipe with timeout to prevent buffer deadlocks
+                        _c_chunks = []
+                        _c_total = 0
+                        _c_MAX = 64 * 1024
+                        _c_start = _safe_time()
+                        _c_timeout = 2.0
+                        while _c_total < _c_MAX:
+                            _c_rem = max(0.01, _c_timeout - (_safe_time() - _c_start))
+                            _c_rlist, _, _ = _safe_select([_c_r_fd], [], [], _c_rem)
+                            if not _c_rlist:
+                                if _safe_kill:
+                                    try:
+                                        _safe_kill(_c_pid, _safe_SIGKILL)
+                                    except Exception:
+                                        pass
+                                break
+                            try:
+                                _c_chk = _safe_read(_c_r_fd, min(16384, _c_MAX - _c_total))
+                            except Exception:
+                                break
+                            if not _c_chk:
+                                break
+                            _c_chunks.append(_c_chk)
+                            _c_total += len(_c_chk)
+
+                        _safe_close(_c_r_fd)
+                        try:
+                            _, _c_status = _safe_waitpid(_c_pid, 0)
+                        except Exception:
+                            _c_status = -1
+
+                        _pipe_out = b"".join(_c_chunks).decode("utf-8", "replace")
                         _c_exit = _safe_WEXITSTATUS(_c_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_c_status)) else -1
                         if _c_exit == 0 and _pipe_out == "OK":
                             _w_results.append({{"name": _name, "status": "PASSED", "error": ""}})
@@ -250,7 +286,12 @@ if _safe_has_fork:
                 "captured_stdout": _w_captured,
                 "compilation_error": _w_comp_err,
             }}).encode("utf-8")
-            _safe_write(_m_w_fd, _w_payload)
+            _w_offset = 0
+            while _w_offset < len(_w_payload):
+                _written = _safe_write(_m_w_fd, _w_payload[_w_offset:_w_offset + 32768])
+                if _written is None or _written <= 0:
+                    break
+                _w_offset += _written
             _safe_close(_m_w_fd)
             _safe_exit(0)
         except _safe_BaseException as _fatal:
@@ -258,11 +299,38 @@ if _safe_has_fork:
     else:
         # PARENT HARNESS PROCESS (Immune to student code tampering)
         _safe_close(_m_w_fd)
-        _, _w_status = _safe_waitpid(_worker_pid, 0)
-        with _safe_fdopen(_m_r_fd, "rb") as _rf:
-            # Bound worker IPC payload to 512 KB to prevent memory exhaustion by compromised worker
-            _raw_worker_out = _rf.read(512 * 1024).decode("utf-8", "replace")
+        # Concurrently drain worker IPC pipe with timeout before/alongside waitpid to prevent pipe deadlocks
+        _w_chunks = []
+        _w_total = 0
+        _w_MAX = 512 * 1024
+        _w_start = _safe_time()
+        _w_timeout = 5.0
+        while _w_total < _w_MAX:
+            _w_rem = max(0.01, _w_timeout - (_safe_time() - _w_start))
+            _w_rlist, _, _ = _safe_select([_m_r_fd], [], [], _w_rem)
+            if not _w_rlist:
+                if _safe_kill:
+                    try:
+                        _safe_kill(_worker_pid, _safe_SIGKILL)
+                    except Exception:
+                        pass
+                break
+            try:
+                _w_chk = _safe_read(_m_r_fd, min(32768, _w_MAX - _w_total))
+            except Exception:
+                break
+            if not _w_chk:
+                break
+            _w_chunks.append(_w_chk)
+            _w_total += len(_w_chk)
 
+        _safe_close(_m_r_fd)
+        try:
+            _, _w_status = _safe_waitpid(_worker_pid, 0)
+        except Exception:
+            _w_status = -1
+
+        _raw_worker_out = b"".join(_w_chunks).decode("utf-8", "replace")
         _w_exit = _safe_WEXITSTATUS(_w_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_w_status)) else -1
         _worker_data = None
         if _w_exit == 0 and _raw_worker_out:

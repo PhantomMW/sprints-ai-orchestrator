@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from src.llm import get_llm
 from src.state import CareerAdvice
 from src.tools.db_queries import get_learner_by_id
+from src.utils.auth import generate_caller_token
 from src.tools.rag_retriever import retrieve_context
 
 
@@ -80,10 +81,10 @@ def create_query_reformulator():
     return llm.with_structured_output(QueryReformulation)
 
 
-def get_learner_profile(student_id: str) -> dict[str, Any]:
-    """Retrieve a learner profile from SQLite."""
-
-    return get_learner_by_id(student_id)
+def get_learner_profile(student_id: str, caller_token: str | None = None) -> dict[str, Any]:
+    """Retrieve a learner profile from SQLite using authorized cryptographic caller tokens."""
+    token = caller_token or generate_caller_token("career_advisor_service", "advisor")
+    return get_learner_by_id(student_id, auth_token=token)
 
 
 def retrieve_career_knowledge(
@@ -346,12 +347,13 @@ def agentic_retrieve_career_knowledge(
 
 def generate_career_advice(
     student_id: str,
+    caller_token: str | None = None,
 ) -> dict[str, Any]:
     """
     Generate evidence-based career recommendations.
 
     Combines:
-        - Verified SQLite learner information.
+        - Verified SQLite learner information (via authorized caller token).
         - Agentic RAG retrieval.
         - Retrieval self-reflection.
         - Structured Gemini career advice.
@@ -360,8 +362,9 @@ def generate_career_advice(
     is insufficient.
     """
 
-    # 1. Retrieve learner profile.
-    profile_result = get_learner_profile(student_id)
+    # 1. Retrieve learner profile using authenticated caller token.
+    token = caller_token or generate_caller_token("career_advisor_service", "advisor")
+    profile_result = get_learner_profile(student_id, caller_token=token)
 
     if profile_result.get("status") != "success":
         return {

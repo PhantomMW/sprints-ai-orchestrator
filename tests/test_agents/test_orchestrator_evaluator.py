@@ -397,3 +397,49 @@ def test_hitl_rejects_replay_attack():
         res2 = orchestrator.invoke(Command(resume={"approved": True, "auth_token": token}), config2)
     assert res2["human_approval"] is False
     assert "replay" in res2["approval_details"]["auth_reason"].lower()
+
+def test_advisor_node_passes_caller_token_in_production(tmp_path, monkeypatch):
+    """Verify that orchestrator passes a verified caller token so learner DB lookup succeeds in production."""
+    import sqlite3
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.setenv("HITL_AUTH_SECRET", "prod-secret-for-advisor-token-test-123456789")
+
+    test_db = tmp_path / "prod_learners.sqlite3"
+    with sqlite3.connect(test_db) as conn:
+        conn.execute("""
+            CREATE TABLE learners (
+                learner_id TEXT PRIMARY KEY,
+                name TEXT,
+                bootcamp_track TEXT,
+                completed_modules INTEGER,
+                python_assignment_score INTEGER,
+                target_salary_egp INTEGER,
+                preferred_employers TEXT,
+                readiness_status TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO learners VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("SPR-PROD-01", "Production Learner", "Advanced Agentic AI", 10, 95, 30000, "Fawry", "Ready for Placement")
+        )
+    monkeypatch.setattr("src.tools.db_queries.DB_PATH", test_db)
+
+    from src.agents.orchestrator import advisor_node
+    with patch("src.agents.advisor_agent.agentic_retrieve_career_knowledge", return_value={"status": "success", "documents": [{"source": "brief.md", "trust_level": "high", "content": "Req"}], "final_query": "q", "retrieval_attempts": 1, "retry_count": 0, "retrieval_sufficient": True, "assessment": {}, "retrieval_trace": []}):
+        with patch("src.agents.advisor_agent.create_advisor_agent") as mock_create_adv:
+            from pydantic import BaseModel
+            class FakeAdvice(BaseModel):
+                learner_name: str = "Production Learner"
+                current_track: str = "Advanced Agentic AI"
+                recommended_roles: list[str] = ["AI Engineer"]
+                technical_skill_gaps: list[str] = []
+                learning_roadmap: list[str] = ["Step 1"]
+                target_salary_analysis: str = "Realistic"
+                overall_recommendation: str = "Portfolio verified"
+            mock_adv_inst = mock_create_adv.return_value
+            mock_adv_inst.invoke.return_value = FakeAdvice()
+
+            res = advisor_node({"student_id": "SPR-PROD-01"})
+            assert res["career_advice"]["status"] == "success"
+            assert res["career_advice"]["student_id"] == "SPR-PROD-01"
+            assert res["career_advice"]["learner_profile"]["name"] == "Production Learner"
