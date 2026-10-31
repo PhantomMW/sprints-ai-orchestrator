@@ -229,7 +229,8 @@ if _safe_has_fork:
                         _safe_close(_c_w_fd)
                         _, _c_status = _safe_waitpid(_c_pid, 0)
                         with _safe_fdopen(_c_r_fd, "rb") as _rf:
-                            _pipe_out = _rf.read().decode("utf-8", "replace")
+                            # Bound assertion IPC payload to 64 KB to prevent memory exhaustion
+                            _pipe_out = _rf.read(64 * 1024).decode("utf-8", "replace")
                         _c_exit = _safe_WEXITSTATUS(_c_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_c_status)) else -1
                         if _c_exit == 0 and _pipe_out == "OK":
                             _w_results.append({{"name": _name, "status": "PASSED", "error": ""}})
@@ -259,7 +260,8 @@ if _safe_has_fork:
         _safe_close(_m_w_fd)
         _, _w_status = _safe_waitpid(_worker_pid, 0)
         with _safe_fdopen(_m_r_fd, "rb") as _rf:
-            _raw_worker_out = _rf.read().decode("utf-8", "replace")
+            # Bound worker IPC payload to 512 KB to prevent memory exhaustion by compromised worker
+            _raw_worker_out = _rf.read(512 * 1024).decode("utf-8", "replace")
 
         _w_exit = _safe_WEXITSTATUS(_w_status) if (_safe_WIFEXITED and _safe_WIFEXITED(_w_status)) else -1
         _worker_data = None

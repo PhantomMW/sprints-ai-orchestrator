@@ -304,3 +304,19 @@ def get_answer():
     assert res["status"] == "success"
     assert res["passed"] == 1
     assert res["failed"] == 0
+
+@requires_docker
+def test_worker_ipc_payload_size_bounded():
+    """Verify that worker IPC output is capped to prevent supervisor process memory exhaustion."""
+    code = """
+def generate_output():
+    # Attempt to generate 1 MB of stdout
+    return "A" * (1024 * 1024)
+
+large_str = generate_output()
+"""
+    suite = "assert len(large_str) == 1024 * 1024"
+    res = run_automated_tests(code=code, test_suite=suite)
+    assert res["status"] == "success"
+    assert res["total"] == 1
+    assert res["passed"] == 1

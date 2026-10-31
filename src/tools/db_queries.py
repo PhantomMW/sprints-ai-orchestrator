@@ -254,23 +254,39 @@ def search_learners_by_track(
         }
 
 
-def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, Any]:
+def get_track_aggregate_stats(
+    bootcamp_track: str | None = None,
+    requester_role: str = "advisor",
+    auth_token: str | None = None,
+) -> dict[str, Any]:
     """
     Compute aggregate performance metrics across a track or all tracks.
 
-    Privacy Controls (k-Anonymity Cohort Threshold):
+    Privacy & Security Controls (k-Anonymity Cohort Threshold & Caller Authorization):
+        - Role-based authorization & cryptographic token verification: Unauthorized callers
+          or unsigned requests in production are strictly rejected to prevent inference attacks.
         - Enforces MIN_COHORT_SIZE = 3: If fewer than 3 learners exist in a cohort,
           individual statistics are withheld (privacy_restricted=True) to prevent
-          re-identification of individuals in sparse groups.
+          re-identification of individuals in sparse groups (k-Anonymity Cohort Suppression).
         - Only returns aggregated averages and counts; no row-level records are exposed.
         - Database opened in read-only mode (mode=ro).
 
     Args:
         bootcamp_track: Optional track filter.
+        requester_role: Calling agent/user role (must be in AUTHORIZED_QUERY_ROLES).
+        auth_token: Cryptographic HMAC caller token. Mandatory in production.
 
     Returns:
         Dictionary containing cohort count and average scores, or privacy restriction.
     """
+    authorized, auth_msg = _authorize_caller(requester_role=requester_role, auth_token=auth_token)
+    if not authorized:
+        return {
+            "status": "error",
+            "message": auth_msg,
+            "data": {},
+        }
+
     if not _ensure_db_exists():
         return {
             "status": "error",
@@ -362,28 +378,34 @@ def get_track_aggregate_stats(bootcamp_track: str | None = None) -> dict[str, An
 # ==============================================================================
 
 @tool
-def get_learner_by_id_tool(student_id: str) -> dict[str, Any]:
+def get_learner_by_id_tool(student_id: str, auth_token: str | None = None) -> dict[str, Any]:
     """
     Safely retrieve a single verified learner profile by unique ID.
-
-    Recommended parameterized tool for learner profile lookups.
+    Enforces cryptographic caller authorization and single-record isolation.
     """
-    return get_learner_by_id(student_id)
+    return get_learner_by_id(student_id, auth_token=auth_token)
 
 
 @tool
-def search_learners_by_track_tool(bootcamp_track: str) -> dict[str, Any]:
+def search_learners_by_track_tool(
+    bootcamp_track: str,
+    limit: int = MAX_QUERY_ROWS,
+    auth_token: str | None = None,
+) -> dict[str, Any]:
     """
     Safely retrieve learners enrolled in a specific bootcamp track.
-
-    Parameterized tool ensuring safe query execution without raw SQL strings.
+    Enforces cryptographic caller authorization and bounded row limits.
     """
-    return search_learners_by_track(bootcamp_track)
+    return search_learners_by_track(bootcamp_track, limit=limit, auth_token=auth_token)
 
 
 @tool
-def get_track_aggregate_stats_tool() -> dict[str, Any]:
+def get_track_aggregate_stats_tool(
+    bootcamp_track: str | None = None,
+    auth_token: str | None = None,
+) -> dict[str, Any]:
     """
-    Retrieve aggregate learner metrics (average scores, counts) without exposing individual rows.
+    Retrieve aggregate learner metrics (averages, counts) with minimum cohort suppression (k=3).
+    Enforces cryptographic caller authorization to prevent inference attacks.
     """
-    return get_track_aggregate_stats()
+    return get_track_aggregate_stats(bootcamp_track=bootcamp_track, auth_token=auth_token)

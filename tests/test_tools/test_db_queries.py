@@ -244,3 +244,20 @@ def test_db_queries_rejects_unsigned_callers_in_production(monkeypatch):
     res = get_learner_by_id("SPR-1001", requester_role="advisor")
     assert res["status"] == "error"
     assert "Cryptographic auth_token is required" in res["message"]
+
+def test_aggregate_stats_caller_token_and_production_guard(monkeypatch):
+    """Verify that aggregate queries verify caller tokens and enforce cryptographic tokens in production."""
+    from src.utils.auth import generate_caller_token
+    
+    # Valid caller token works
+    token = generate_caller_token("analytics_service", "advisor")
+    res = get_track_aggregate_stats(bootcamp_track="Advanced Agentic AI", auth_token=token)
+    assert res["status"] == "success"
+    assert res["data"]["learner_count"] >= 3
+
+    # In production without token, access is blocked
+    monkeypatch.setenv("SPRINTS_ENV", "production")
+    monkeypatch.setenv("HITL_AUTH_SECRET", "prod-secret-key-test-123456789012345678")
+    res_prod = get_track_aggregate_stats(bootcamp_track="Advanced Agentic AI")
+    assert res_prod["status"] == "error"
+    assert "Cryptographic auth_token is required" in res_prod["message"]

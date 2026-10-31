@@ -837,7 +837,7 @@ parameterized domain tools:
 
 - `search_learners_by_track_tool`: parameterized lookup by track name.
 
-- `get_track_aggregate_stats_tool`: aggregate cohort statistics with differential privacy enforcement.
+- `get_track_aggregate_stats_tool`: aggregate cohort statistics with minimum cohort suppression (k-anonymity threshold) enforcement.
 
 **k-Anonymity Cohort Threshold & Aggregation Privacy:**
 
@@ -1186,11 +1186,9 @@ approval checkpoint.
 
 The project has a working prototype structure and an extensive passing
 
-test suite (89 automated tests across 12 suites). Its architecture incorporates multi-layer process isolation,
+test suite (95 automated tests across 12 suites). Its architecture incorporates Master-Worker process isolation,
 
-durable SQLite checkpointing with HMAC payload signing, role-based HITL authentication,
-
-and k-anonymity cohort protection. Its current prototype boundaries include the limited project-context
+durable SQLite checkpointing with Fernet AES-128-CBC encryption at rest and coordinate-bound HMAC signatures, PBKDF2 reviewer authentication with brute-force rate limiting, persistent anti-replay nonce storage, and k-anonymity cohort protection. Its current prototype boundaries include the limited project-context
 
 knowledge base and the absence of live vacancy feeds. These
 

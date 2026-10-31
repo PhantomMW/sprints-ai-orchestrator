@@ -64,7 +64,7 @@ assert calculate_metrics([]) == (0, 0)
 
     print("Submitted Learner Code:")
     print(sample_code.strip())
-    print("\nExecuting in Docker Sandbox with Per-Test Namespace Isolation...")
+    print("\nExecuting with Master-Worker Process Isolation (Supervisor & Child Worker) & Docker Sandbox...")
 
     test_metrics = run_automated_tests(sample_code, test_suite, expected_output)
     print("\nAutomated Test Runner Verification:")
@@ -78,7 +78,7 @@ assert calculate_metrics([]) == (0, 0)
         print(f"  {status_symbol} {r['name']} -> {r['status']}")
 
     # -------------------------------------------------------------------------
-    # STAGE 2: Safe Parameterized Data Access & Differential Privacy
+    # STAGE 2: Safe Parameterized Data Access & Privacy Controls
     # -------------------------------------------------------------------------
     print("\n[STAGE 2/4] Career Advisor: Safe Parameterized Queries & Privacy Controls")
     print("-" * 70)
@@ -99,9 +99,9 @@ assert calculate_metrics([]) == (0, 0)
     print(f"  Python Score: {demo_synthetic_learner['python_assignment_score']}/100")
     print(f"  Placement Readiness: {demo_synthetic_learner['readiness_status']}")
     print("\n  Privacy Guardrails:")
-    print("  - Single-learner lookups use parameterized SQL (get_learner_by_id)")
+    print("  - Single-learner lookups use parameterized SQL with cryptographic caller tokens")
     print("  - Bulk queries enforce MAX_QUERY_ROWS = 5 and column projection filters")
-    print("  - Track aggregates enforce MIN_COHORT_SIZE = 3 differential privacy")
+    print("  - Track aggregates enforce MIN_COHORT_SIZE = 3 (Minimum Cohort Suppression / k-Anonymity Threshold)")
     print("  - Privacy Guarantee: Zero identifiable personal records in public demos")
 
     # -------------------------------------------------------------------------
@@ -130,10 +130,12 @@ assert calculate_metrics([]) == (0, 0)
     print("  2. Learner meets criteria: 'Ready for Placement' + Preferred Employer 'Fawry'")
     print("  3. LangGraph interrupt() pauses graph execution before final clearance")
     print("  4. Checkpoint snapshot is committed to SQLite (safe across process restart)")
-    print("\n[Human Review Checkpoint Simulated]:")
-    print("  Reviewer: Senior Placement Coordinator")
-    print("  Decision: APPROVED with guidance notes")
-    print("  Command(resume=...) dispatched -> Graph completes execution")
+    print("\n[Human Reviewer Authentication & Cryptographic Token Issuance]:")
+    print("  Institutional Reviewer: sarah_lead (Lead Career Advisor)")
+    login_ok, login_msg, session_token = login_and_issue_token("sarah_lead", "SprintsAdvisor2026!")
+    print(f"  PBKDF2-HMAC Credentials Check: {'[AUTHENTICATED]' if login_ok else '[FAILED]'} ({login_msg})")
+    print(f"  Cryptographic Reviewer Token: {session_token[:36]}... [HMAC-SHA256 Signed]")
+    print("  Dispatching Command(resume=...) with verified token -> Graph completes execution")
     print("\nFinal Multi-Agent Response:")
     print("  'Learner SYN-DEMO-01 cleared for career advising. Portfolio meets requirements.'")
     print("  'Human Placement Review: APPROVED by Senior Placement Coordinator.'")

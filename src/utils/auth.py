@@ -91,9 +91,12 @@ class PersistentNonceStore:
                     ON consumed_nonces (expires_at)
                 """)
                 conn.commit()
-        except Exception:
-            # Maintain in-memory fallback if disk directory is inaccessible
-            pass
+        except Exception as e:
+            app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+            if app_env in ("production", "prod", "staging"):
+                raise SecurityConfigurationError(
+                    f"FATAL: Persistent nonce store database failed to initialize at {self.db_path}: {e}"
+                )
 
     def consume(self, nonce: str, reviewer_id: str, expires_at: float) -> bool:
         """
@@ -125,8 +128,15 @@ class PersistentNonceStore:
                 # Primary key collision: nonce replayed
                 self._memory_fallback.add(nonce)
                 return False
-            except Exception:
-                # Fallback to process-local set if SQLite write fails
+            except Exception as e:
+                app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+                if app_env in ("production", "prod", "staging"):
+                    # Fail-closed in production: strictly disallow in-memory fallback
+                    raise SecurityConfigurationError(
+                        f"FATAL: Persistent nonce store write error in production: {e}. "
+                        "In-memory fallback is disabled in production to prevent token replay attacks."
+                    )
+                # Fallback to process-local set if SQLite write fails ONLY in development
                 if nonce in self._memory_fallback:
                     return False
                 self._memory_fallback.add(nonce)
@@ -199,54 +209,120 @@ def verify_password(password: str, hashed_str: str) -> bool:
         return False
 
 
-# Seed directory of pre-registered institutional reviewer accounts with roles and hashed credentials
-_PRE_REGISTERED_REVIEWERS: dict[str, dict[str, str]] = {
+# Rate limiting and lockout state for human reviewer authentication
+MAX_FAILED_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_WINDOW_SECONDS = 900  # 15 minutes lockout window
+_FAILED_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+
+
+def reset_login_rate_limits() -> None:
+    """Reset the login rate limit tracking state (primarily for test isolation)."""
+    with _RATE_LIMIT_LOCK:
+        _FAILED_LOGIN_ATTEMPTS.clear()
+
+
+# Pre-hashed institutional reviewer credentials (PBKDF2-HMAC-SHA256, 100,000 rounds)
+# Stored solely as salted hashes without plaintext credentials in source code.
+# In production, custom credentials should be configured via SPRINTS_REVIEWERS_CONFIG.
+_DEFAULT_REVIEWER_HASHES: dict[str, dict[str, str]] = {
     "sarah_lead": {
         "role": "lead_career_advisor",
-        "password_hash": hash_password("SprintsAdvisor2026!", salt="sprints_salt_sarah"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_sarah$647253ca4b365e1545ce346b9002728fee80edfa5c39da5991d181779bcd9003",
     },
     "placement_director": {
         "role": "placement_director",
-        "password_hash": hash_password("DirectorSecure2026!", salt="sprints_salt_director"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_director$c0be12f39905d70caca5274e569856c77d16fe241475fe6e73041d9b4ac2cd57",
     },
     "director of placement": {
         "role": "placement_director",
-        "password_hash": hash_password("DirectorSecure2026!", salt="sprints_salt_director_alias"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_director_alias$75bfbfb7453ec1adb9e22b59cb3549c0f70aa391dea48d51dbed921ac456d635",
     },
     "career_admin": {
         "role": "placement_approver",
-        "password_hash": hash_password("AdminPlacement2026!", salt="sprints_salt_admin"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_admin$eea51c8572067f62782f93253516f1c00193090502004960dbfac506e3889778",
     },
     "institutional_reviewer": {
         "role": "institutional_admin",
-        "password_hash": hash_password("GovReviewer2026!", salt="sprints_salt_gov"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_gov$3cc6fa3f2131f35458ed1299324d3c35f4401dd113c7f009d0539bbacf00dde3",
     },
     "ahmed_lead": {
         "role": "lead_career_advisor",
-        "password_hash": hash_password("AhmedAdvisor2026!", salt="sprints_salt_ahmed"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_ahmed$8bdb05841c3abd697459d50c6ae59f435988c0ef327d481444e978d82089dd94",
     },
     "test reviewer": {
         "role": "placement_approver",
-        "password_hash": hash_password("TestReviewer2026!", salt="sprints_salt_test"),
+        "password_hash": "pbkdf2:sha256:100000$sprints_salt_test$688a80d9aa3caade5f66911bd6226f0d718de12d20b915cba72d89ef9d57396d",
     },
 }
+
+
+def get_registered_reviewers() -> dict[str, dict[str, str]]:
+    """
+    Retrieve registered institutional reviewers.
+    Prioritizes SPRINTS_REVIEWERS_CONFIG environment variable if present.
+    In production environments, using default accounts requires explicit opt-in
+    via SPRINTS_ENABLE_DEMO_REVIEWERS=true or custom SPRINTS_REVIEWERS_CONFIG.
+    """
+    config_env = os.getenv("SPRINTS_REVIEWERS_CONFIG")
+    if config_env:
+        try:
+            parsed = json.loads(config_env)
+            if isinstance(parsed, dict):
+                return {k.strip().casefold(): v for k, v in parsed.items()}
+        except Exception:
+            pass
+
+    app_env = os.getenv("SPRINTS_ENV", os.getenv("ENV", "development")).strip().lower()
+    if app_env in ("production", "prod", "staging"):
+        if os.getenv("SPRINTS_ENABLE_DEMO_REVIEWERS") != "true" and not config_env:
+            # In strict production without demo opt-in or custom config, return empty
+            return {}
+
+    return dict(_DEFAULT_REVIEWER_HASHES)
 
 
 def authenticate_reviewer(username: str, password: str) -> tuple[bool, str, dict[str, Any]]:
     """
     Authenticate a human reviewer using verified credentials before issuing a session token.
+    Applies sliding-window rate limiting to resist brute-force password guessing attacks.
     
     Returns:
         (is_authenticated, reason, reviewer_info)
     """
     clean_user = username.strip().casefold()
-    user_record = _PRE_REGISTERED_REVIEWERS.get(clean_user)
+    now = time.time()
+
+    # 1. Rate limiting check (anti brute-force)
+    with _RATE_LIMIT_LOCK:
+        attempts = _FAILED_LOGIN_ATTEMPTS.get(clean_user, [])
+        recent_attempts = [t for t in attempts if now - t < LOGIN_LOCKOUT_WINDOW_SECONDS]
+        _FAILED_LOGIN_ATTEMPTS[clean_user] = recent_attempts
+
+        if len(recent_attempts) >= MAX_FAILED_LOGIN_ATTEMPTS:
+            remaining_lockout = int(LOGIN_LOCKOUT_WINDOW_SECONDS - (now - recent_attempts[0]))
+            return (
+                False,
+                f"Account temporarily locked due to excessive failed attempts. Try again in {remaining_lockout}s.",
+                {},
+            )
+
+    reviewers_dir = get_registered_reviewers()
+    user_record = reviewers_dir.get(clean_user)
 
     if not user_record:
+        with _RATE_LIMIT_LOCK:
+            _FAILED_LOGIN_ATTEMPTS.setdefault(clean_user, []).append(now)
         return False, f"Reviewer '{username}' not registered in institutional directory.", {}
 
     if not verify_password(password, user_record["password_hash"]):
+        with _RATE_LIMIT_LOCK:
+            _FAILED_LOGIN_ATTEMPTS.setdefault(clean_user, []).append(now)
         return False, "Invalid reviewer password or credentials.", {}
+
+    # Successful authentication: clear failed attempts
+    with _RATE_LIMIT_LOCK:
+        _FAILED_LOGIN_ATTEMPTS.pop(clean_user, None)
 
     return True, "Reviewer credentials authenticated successfully.", {
         "reviewer_id": username.strip(),

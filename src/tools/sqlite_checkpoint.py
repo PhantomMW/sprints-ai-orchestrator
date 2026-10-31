@@ -6,7 +6,14 @@ from pathlib import Path
 import pickle
 import sqlite3
 import threading
+import base64
 from typing import Any
+
+try:
+    from cryptography.fernet import Fernet
+    HAS_FERNET = True
+except ImportError:
+    HAS_FERNET = False
 
 class CheckpointSecurityError(Exception):
     """Raised when checkpoint cryptographic integrity verification fails."""
@@ -56,9 +63,30 @@ class SqliteSaver(InMemorySaver):
                     "FATAL: Insecure default CHECKPOINT_SECRET_KEY detected in production. A strong key must be configured."
                 )
         self.secret_key = (resolved_key or "sprints-checkpoint-integrity-key-2026").encode("utf-8")
+        if HAS_FERNET:
+            derived_32 = hashlib.sha256(self.secret_key).digest()
+            self._fernet_key = base64.urlsafe_b64encode(derived_32)
+            self._cipher = Fernet(self._fernet_key)
+        else:
+            self._cipher = None
         self._lock = threading.Lock()
         self._init_db()
         self._load_from_db()
+
+    def _encrypt(self, data: bytes) -> bytes:
+        """Encrypt serialized bytes at rest using AES-CBC/HMAC Fernet cipher."""
+        if self._cipher:
+            return self._cipher.encrypt(data)
+        return data
+
+    def _decrypt(self, data: bytes) -> bytes:
+        """Decrypt binary blob from storage; fallback to raw data if unencrypted for backward compatibility."""
+        if self._cipher:
+            try:
+                return self._cipher.decrypt(data)
+            except Exception:
+                return data
+        return data
 
     def _sign(self, data: bytes, context_prefix: str = "") -> str:
         """Compute an HMAC-SHA256 signature bound to contextual row identifiers to prevent cut-and-paste attacks."""
@@ -142,14 +170,14 @@ class SqliteSaver(InMemorySaver):
                         raise SecurityError(
                             f"Integrity check failed for checkpoint {t_id}/{cp_id}: signature mismatch."
                         )
-                    self.storage[t_id][ns][cp_id] = pickle.loads(cp_data)
+                    self.storage[t_id][ns][cp_id] = pickle.loads(self._decrypt(cp_data))
 
                 for row in conn.execute("SELECT blob_key, blob_data, signature FROM blobs"):
                     b_key, b_data, sig = row
                     ctx = f"blob:{b_key!r}:"
                     if not self._verify_signature(b_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint blob: signature mismatch.")
-                    self.blobs[pickle.loads(b_key)] = pickle.loads(b_data)
+                    self.blobs[pickle.loads(b_key)] = pickle.loads(self._decrypt(b_data))
 
                 for row in conn.execute("SELECT write_key, write_tuple, signature FROM writes"):
                     w_key, w_data, sig = row
@@ -157,7 +185,7 @@ class SqliteSaver(InMemorySaver):
                     if not self._verify_signature(w_data, sig, context_prefix=ctx):
                         raise SecurityError("Integrity check failed for checkpoint write: signature mismatch.")
                     outer_key, inner_key = pickle.loads(w_key)
-                    self.writes[outer_key][inner_key] = pickle.loads(w_data)
+                    self.writes[outer_key][inner_key] = pickle.loads(self._decrypt(w_data))
             finally:
                 conn.close()
 
@@ -177,7 +205,8 @@ class SqliteSaver(InMemorySaver):
             conn = self._connect()
             try:
                 if cp_id in self.storage[thread_id][checkpoint_ns]:
-                    data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
+                    raw_data = pickle.dumps(self.storage[thread_id][checkpoint_ns][cp_id])
+                    data = self._encrypt(raw_data)
                     ctx = f"{thread_id}:{checkpoint_ns}:{cp_id}:"
                     sig = self._sign(data, context_prefix=ctx)
                     conn.execute(
@@ -187,7 +216,8 @@ class SqliteSaver(InMemorySaver):
                 for k, v in new_versions.items():
                     blob_key = (thread_id, checkpoint_ns, k, v)
                     if blob_key in self.blobs:
-                        b_data = pickle.dumps(self.blobs[blob_key])
+                        raw_b_data = pickle.dumps(self.blobs[blob_key])
+                        b_data = self._encrypt(raw_b_data)
                         b_key_ser = pickle.dumps(blob_key)
                         ctx = f"blob:{b_key_ser!r}:"
                         conn.execute(
@@ -219,7 +249,8 @@ class SqliteSaver(InMemorySaver):
                     for inner_key, write_tuple in list(self.writes[outer_key].items()):
                         full_key = (outer_key, inner_key)
                         full_key_ser = pickle.dumps(full_key)
-                        w_data = pickle.dumps(write_tuple)
+                        raw_w_data = pickle.dumps(write_tuple)
+                        w_data = self._encrypt(raw_w_data)
                         ctx = f"write:{full_key_ser!r}:"
                         conn.execute(
                             "INSERT OR REPLACE INTO writes VALUES (?, ?, ?)",

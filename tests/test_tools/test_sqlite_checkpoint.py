@@ -328,3 +328,38 @@ def test_sqlite_checkpoint_production_key_guard(tmp_path, monkeypatch):
     with pytest.raises(CheckpointSecurityError) as excinfo:
         SqliteSaver(db_file)
     assert "CHECKPOINT_SECRET_KEY" in str(excinfo.value)
+
+def test_sqlite_checkpoint_fernet_encryption_at_rest(tmp_path):
+    """Verify that checkpoint payloads on disk are encrypted using Fernet and not plain pickle."""
+    import sqlite3
+    import pickle
+    db_file = tmp_path / "enc_test.sqlite3"
+    saver = SqliteSaver(db_file, secret_key="custom-secure-key-for-encryption-test-2026")
+
+    builder = StateGraph(dict)
+    builder.add_node("step", lambda s: {"val": "secret-student-data-42"})
+    builder.set_entry_point("step")
+    builder.set_finish_point("step")
+    graph = builder.compile(checkpointer=saver)
+
+    cfg = {"configurable": {"thread_id": "thread-encrypted"}}
+    graph.invoke({"val": "initial"}, config=cfg)
+
+    # Read raw blob from SQLite database directly
+    with sqlite3.connect(db_file) as conn:
+        cursor = conn.execute("SELECT checkpoint_tuple FROM checkpoints WHERE thread_id = 'thread-encrypted'")
+        raw_blob = cursor.fetchone()[0]
+
+    # Verify that raw blob is NOT plain readable pickle (Fernet encrypted)
+    try:
+        pickle.loads(raw_blob)
+        is_plain_pickle = True
+    except Exception:
+        is_plain_pickle = False
+    assert is_plain_pickle is False, "Checkpoint blob on disk should be encrypted, not raw pickle!"
+
+    # Verify that a new instance with the same secret key decrypts and reads successfully
+    saver2 = SqliteSaver(db_file, secret_key="custom-secure-key-for-encryption-test-2026")
+    graph2 = builder.compile(checkpointer=saver2)
+    state = graph2.get_state(cfg)
+    assert state.values["val"] == "secret-student-data-42"
