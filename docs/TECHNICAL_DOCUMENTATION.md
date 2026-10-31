@@ -105,56 +105,35 @@ environment, including transitive dependencies.
 
 ## 4. Repository Structure
 
-``` text
+The public repository contains source code, tests, configuration, and documentation. Local datasets, client-provided source materials, learner records, SQLite databases, and ChromaDB persistence files are intentionally excluded.
+
+```text
 sprints-ai-orchestrator/
-├── data/
-│   ├── curriculum_docs/
-│   │   ├── client_kickoff_deck.pptx
-│   │   └── client_discovery_call.mp3
-│   ├── processed/
-│   │   ├── client_kickoff_deck.md
-│   │   ├── client_discovery_call.md
-│   │   └── project_brief.md
-│   ├── sprints_learner_db.csv
-│   ├── sprints_learners.sqlite3
-│   └── chroma_db/
 ├── sandbox/
 │   └── Dockerfile
 ├── src/
-│   ├── __init__.py
-│   ├── llm.py
-│   ├── main.py
-│   ├── state.py
 │   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── advisor_agent.py
-│   │   ├── assessor_agent.py
-│   │   ├── evaluator_optimizer.py
-│   │   └── orchestrator.py
-│   └── tools/
-│       ├── __init__.py
-│       ├── audio_transcriber.py
-│       ├── code_repl.py
-│       ├── db_queries.py
-│       ├── docker_executor.py
-│       ├── document_loader.py
-│       └── rag_retriever.py
-├── notebooks/
+│   ├── tools/
+│   ├── state.py
+│   ├── llm.py
+│   └── main.py
 ├── docs/
 ├── tests/
-│   ├── __init__.py
-│   └── test_agents/
-│       ├── test_agentic_rag.py
-│       ├── test_evaluator_optimizer.py
-│       └── test_orchestrator_evaluator.py
+│   ├── test_agents/
+│   └── test_tools/       # tool-level tests
 ├── requirements.txt
 ├── README.md
 └── .gitignore
 ```
 
-This tree reflects the repository layout reviewed during documentation
-preparation. Generated `__pycache__` folders are omitted because they
-are Python runtime artifacts.
+The following runtime inputs are expected to be provisioned locally and are not distributed in this public repository:
+
+- Approved curriculum or project-context documents used for ingestion.
+- Locally generated processed text and ChromaDB data.
+- The SQLite learner database and any learner export files.
+- A local `.env` file containing the Gemini API credential.
+
+Do not add client recordings, client presentations, transcripts, learner exports, or identifiable learner records to the public repository. Confirm ownership, consent, and publication permission before sharing any source material.
 
 ## 5. Shared State and Structured Models
 
@@ -270,18 +249,34 @@ are implemented in `src/tools/docker_executor.py`.
 The sandbox image is based on `python:3.10-slim`, creates a non-root
 user with UID 10001, and runs from `/sandbox`.
 
-The runtime configuration tested during development includes: - Network
-disabled. - Read-only container root filesystem. - Memory limit of 128
-MB. - CPU quota of 0.5 CPU. - Process limit of 64. - All Linux
-capabilities dropped. - `no-new-privileges`. - A small temporary
-filesystem mounted with `noexec` and `nosuid`. - A five-second execution
-timeout. - Automatic container removal.
+The runtime configuration includes:
 
-These controls reduce the risk of executing learner code directly on the
-host. They do not constitute a production-grade security boundary. In
-particular, the current executor captures process output without an
-explicit output-size cap. Do not expose this prototype to arbitrary
-public submissions without additional hardening and security review.
+- Network disabled.
+- Read-only container root filesystem.
+- Memory limit of 128 MB.
+- CPU quota of 0.5 CPU.
+- Process limit of 64.
+- All Linux capabilities dropped.
+- `no-new-privileges`.
+- A temporary filesystem mounted with `noexec` and `nosuid`.
+- A five-second execution timeout.
+- Automatic container removal.
+- Bounded output capture: stdout and stderr are each limited to 64 KiB.
+
+Output is read in chunks by dedicated reader threads. Once a stream
+reaches its capture limit, the reader continues draining and discarding
+additional bytes so a full pipe does not block the child process. The
+returned result includes an `output_truncated` flag and a truncation
+marker when applicable. This bounds application memory used for captured
+output; it is not a substitute for broader host-level disk, logging, or
+container-runtime controls.
+
+These controls reduce risk but do not establish a production-grade
+security boundary. Do not expose this prototype to arbitrary public
+submissions without independent security review, stronger isolation
+(e.g. dedicated worker hosts or microVMs), monitoring, and operational
+limits. Docker daemon access itself is highly privileged and must remain
+under trusted application control.
 
 ## 9. Evaluator-Optimizer
 
@@ -344,37 +339,41 @@ durable storage across application restarts.
 ## 11. Learner Database and Tools
 
 `src/tools/db_queries.py` provides read-only SQLite access. The SQL
-query tool is restricted to SELECT queries and opens the database in
-read-only mode. Learner lookup uses a parameterized query.
+query tool accepts SELECT queries and opens the database in read-only
+mode. The learner lookup function uses a parameterized query.
 
-The database currently contains sample learner records. For example, the
-reviewed `SPR-1001` record contains a learner track, completed module
-count, Python assignment score, target salary, preferred employers, and
-readiness status. This is sample project data, not a live Sprints
-learner system.
+The database is a local runtime dependency and is not included in the
+public repository. This documentation intentionally omits learner IDs,
+names, scores, salary targets, employer preferences, and individual
+readiness details. Use synthetic records for demonstrations and tests.
+Do not publish real learner information unless the data owner has
+explicitly authorized that disclosure and the data has been reviewed for
+personal or confidential information.
 
-Other tool modules include: - `document_loader.py`: document ingestion
-support. - `audio_transcriber.py`: audio transcription support. -
-`rag_retriever.py`: document chunking, embedding, ChromaDB ingestion,
-and retrieval. - `code_repl.py`: LangChain tool wrapper for Python
-execution. - `docker_executor.py`: Docker-backed execution.
+Other tool modules include:
+
+- `document_loader.py`: document ingestion support.
+- `audio_transcriber.py`: audio transcription support.
+- `rag_retriever.py`: document chunking, embedding, ChromaDB ingestion,
+  and retrieval.
+- `code_repl.py`: LangChain tool wrapper for Python execution.
+- `docker_executor.py`: Docker-backed execution.
 
 ## 12. Knowledge Sources and Evidence Limitations
 
-The reviewed source materials include: - `client_kickoff_deck.pptx`. -
-`client_discovery_call.mp3` and its processed transcript. -
-`project_brief.md`.
+Knowledge-base inputs are maintained locally and are not published in
+this repository. The current ChromaDB collection contains project
+context, not the complete official Sprints curriculum.
 
-Important provenance limitations: - Slides 3 and 4 of the kickoff deck
-were truncated in the available source. - The discovery-call transcript
-was generated by Gemini and has not been human-verified. - The current
-ChromaDB collection contains project-context documents, not the complete
-official Sprints curriculum. - The learner database does not contain a
-live job openings table.
+Source documents may contain client or learner information. Before
+ingestion or redistribution, verify that the material is authorized for
+the intended use. AI-generated transcripts must be human-reviewed
+before being treated as authoritative evidence. Incomplete or
+unverified source material must be clearly labeled and must not be used
+to assert official curriculum coverage, employer hiring criteria, or
+current job vacancies.
 
-Therefore, the system must not claim that it has verified current job
-vacancies, official employer hiring criteria, or complete curriculum
-coverage.
+The learner database does not contain a live job openings table.
 
 ## 13. Installation and Configuration
 
