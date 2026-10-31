@@ -391,7 +391,7 @@ _pct = round((_passed / _total * 100), 1) if _total > 0 else 0.0
 # Bounded emitted captured stdout to 32 KiB to prevent container stdout overflow
 _emitted_stdout = _captured_stdout
 if isinstance(_emitted_stdout, str) and len(_emitted_stdout) > 32768:
-    _emitted_stdout = _emitted_stdout[:32768] + "\n... [stdout truncated by test runner]"
+    _emitted_stdout = _emitted_stdout[:32768] + " ... [stdout truncated]"
 
 # Emit output using safe primitive stdout writer
 _output_json = _safe_json_dumps({{
