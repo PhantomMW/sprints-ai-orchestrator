@@ -74,6 +74,20 @@ BENCHMARK_DATASET = [
         "factual_assertions": ["evaluator", "optimizer", "refinement iteration", "rubric", "criteria", "latency"],
         "expected_sources": ["project_brief.md", "client_kickoff_deck.md"],
     },
+    {
+        "domain": "Pydantic Schemas & Output Parsers",
+        "query": "Pydantic prompt templates output parsers score feedback points and pass status json schemas",
+        "keywords": ["pydantic", "parser", "schema", "prompt", "feedback", "pass_status"],
+        "factual_assertions": ["pydantic", "output parser", "feedback_point", "pass_status", "schema"],
+        "expected_sources": ["project_brief.md", "client_kickoff_deck.md"],
+    },
+    {
+        "domain": "Conversational MemorySaver & Multi-Turn State",
+        "query": "LangGraph MemorySaver checkpointer session checkpointing conversational state persistence thread ID",
+        "keywords": ["memorysaver", "checkpoint", "state", "session", "thread", "langgraph", "amnesia", "orchestrator"],
+        "factual_assertions": ["memorysaver", "thread id", "checkpointer", "session", "amnesia"],
+        "expected_sources": ["project_brief.md", "client_kickoff_deck.md", "client_discovery_call.md"],
+    },
 ]
 
 # 2. NEGATIVE / OUT-OF-DOMAIN CONTROLS (Unsupported Claim Detection)
@@ -245,7 +259,7 @@ def run_rag_benchmark(
     summary = {
         "benchmark_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "scope_and_methodology": (
-            "Evaluated against 6 core curriculum domains (18 retrieved chunks) plus 2 out-of-domain negative controls. "
+            "Evaluated against 8 core curriculum domains (24 retrieved chunks) plus 2 out-of-domain negative controls. "
             "Metrics measure factual grounding, expected source matching, fact recall, and unsupported claim rejection. "
             "Results represent regression performance on this curated benchmark suite and establish engineering baselines "
             "rather than an unconditional 100% accuracy claim for uncurated open-ended queries."

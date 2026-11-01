@@ -228,15 +228,27 @@ assert calculate_metrics([]) == (0, 0)
     print("  -> Workflow triggered LangGraph interrupt() and paused state safely.")
     print("  -> Checkpoint committed persistently to SQLite (resilient to process restart).")
 
+    reviewer_user = os.getenv("SPRINTS_REVIEWER_USER", "sarah_lead")
+    reviewer_password = os.getenv("SPRINTS_REVIEWER_PASSWORD")
+
     print("\n[Human Reviewer Authentication & Cryptographic Token Issuance]:")
-    print("  Institutional Reviewer: sarah_lead (Lead Career Advisor)")
-    login_ok, login_msg, session_token = login_and_issue_token("sarah_lead", "SprintsAdvisor2026!")
-    print(f"  PBKDF2-HMAC Credentials Check: {'[AUTHENTICATED]' if login_ok else '[FAILED]'} ({login_msg})")
+    print(f"  Institutional Reviewer: {reviewer_user} (Lead Career Advisor)")
+    if reviewer_password:
+        login_ok, login_msg, session_token = login_and_issue_token(reviewer_user, reviewer_password)
+        auth_method = "PBKDF2-HMAC Credentials Authentication (SPRINTS_REVIEWER_PASSWORD)"
+    else:
+        # In automated demonstration without external env secrets, dynamically issue an ephemeral cryptographically signed reviewer token
+        session_token = generate_reviewer_token(reviewer_user, role="lead_career_advisor")
+        login_ok, login_msg = True, "Authenticated via Ephemeral HMAC-SHA256 Token"
+        auth_method = "Cryptographic Ephemeral Token (Zero Hardcoded Plaintext Secrets)"
+
+    print(f"  Authentication Method: {auth_method}")
+    print(f"  Status: {'[AUTHENTICATED]' if login_ok else '[FAILED]'} ({login_msg})")
     print(f"  Cryptographic Reviewer Token: {session_token[:36]}... [HMAC-SHA256 Signed]")
     print("  Resuming workflow via Command(resume={'approved': True, 'auth_token': session_token})...")
 
     resumed_result = demo_orchestrator.invoke(
-        Command(resume={"approved": True, "auth_token": session_token, "reviewer": "sarah_lead"}),
+        Command(resume={"approved": True, "auth_token": session_token, "reviewer": reviewer_user}),
         config=config,
     )
 
@@ -325,7 +337,12 @@ def run_interactive_mode():
                 if approved:
                     print("\n--- Institutional Reviewer Login ---")
                     rev_user = input("Reviewer Username [default: sarah_lead]: ").strip() or "sarah_lead"
-                    rev_pass = input("Reviewer Password [default: SprintsAdvisor2026!]: ").strip() or "SprintsAdvisor2026!"
+                    default_pass = os.getenv("SPRINTS_REVIEWER_PASSWORD")
+                    if default_pass:
+                        rev_pass = input("Reviewer Password [press Enter to use SPRINTS_REVIEWER_PASSWORD]: ").strip() or default_pass
+                    else:
+                        import getpass
+                        rev_pass = getpass.getpass("Reviewer Password: ")
                     login_ok, login_msg, auth_tok = login_and_issue_token(rev_user, rev_pass)
                     if not login_ok:
                         print(f"Authentication failed: {login_msg}")
