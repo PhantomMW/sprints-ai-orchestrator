@@ -1,15 +1,19 @@
 {
-  "benchmark_timestamp": "2026-10-31T23:27:16Z",
+  "benchmark_timestamp": "2026-11-01T00:11:59Z",
+  "scope_and_methodology": "Evaluated against 6 core curriculum domains (18 retrieved chunks) plus 2 out-of-domain negative controls. Metrics measure factual grounding, expected source matching, fact recall, and unsupported claim rejection. Results represent regression performance on this curated benchmark suite and establish engineering baselines rather than an unconditional 100% accuracy claim for uncurated open-ended queries.",
   "total_queries": 6,
   "k_eval": 3,
   "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
   "vector_store": "ChromaDB (PersistentClient)",
   "mean_precision_at_k": 1.0,
+  "expected_source_match_ratio": 1.0,
+  "mean_fact_recall": 0.889,
   "domain_recall": 1.0,
   "provenance_ratio": 1.0,
   "factual_grounding_ratio": 1.0,
   "strict_groundedness_ratio": 1.0,
-  "mean_latency_ms": 12.64,
+  "unsupported_claim_detection_rate": 1.0,
+  "mean_latency_ms": 13.53,
   "domains_covered": [
     "Agentic RAG & Knowledge Self-Reflection",
     "Evaluator-Optimizer & Quality Acceptance Criteria",
@@ -25,11 +29,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 13.72,
+      "source_match_rate": 1.0,
+      "fact_recall": 1.0,
+      "latency_ms": 13.31,
       "retrieved_docs": [
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "dynamic routing",
             "orchestrat"
@@ -41,6 +48,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "dynamic routing",
             "orchestrat"
@@ -52,6 +60,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "stategraph",
             "orchestrat",
@@ -70,11 +79,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 13.44,
+      "source_match_rate": 1.0,
+      "fact_recall": 0.5,
+      "latency_ms": 13.5,
       "retrieved_docs": [
         {
           "source": "client_discovery_call.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "repl",
             "sandbox",
@@ -87,6 +99,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "grad"
           ],
@@ -97,6 +110,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "grad"
           ],
@@ -112,11 +126,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 12.32,
+      "source_match_rate": 1.0,
+      "fact_recall": 1.0,
+      "latency_ms": 14.07,
       "retrieved_docs": [
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "human-in-the-loop",
             "hitl",
@@ -132,6 +149,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "human-in-the-loop",
             "hitl",
@@ -144,6 +162,7 @@
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "human-in-the-loop",
             "hitl",
@@ -162,11 +181,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 11.94,
+      "source_match_rate": 1.0,
+      "fact_recall": 1.0,
+      "latency_ms": 14.1,
       "retrieved_docs": [
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "sprints_learner_db",
             "salary",
@@ -182,6 +204,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "salary",
             "egp",
@@ -195,6 +218,7 @@
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "salary",
             "egp",
@@ -213,11 +237,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 12.35,
+      "source_match_rate": 1.0,
+      "fact_recall": 1.0,
+      "latency_ms": 12.44,
       "retrieved_docs": [
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "self-reflection",
             "reformulat",
@@ -230,6 +257,7 @@
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "chromadb",
             "chunk",
@@ -242,6 +270,7 @@
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "self-reflection"
           ],
@@ -257,11 +286,14 @@
       "retrieved_k": 3,
       "relevant_count": 3,
       "precision": 1.0,
-      "latency_ms": 12.05,
+      "source_match_rate": 1.0,
+      "fact_recall": 0.833,
+      "latency_ms": 13.75,
       "retrieved_docs": [
         {
           "source": "project_brief.md",
           "trust_level": "high",
+          "matches_expected_source": true,
           "matched_facts": [
             "evaluator",
             "optimizer",
@@ -276,6 +308,7 @@
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "evaluator",
             "optimizer",
@@ -289,6 +322,7 @@
         {
           "source": "client_kickoff_deck.md",
           "trust_level": "medium",
+          "matches_expected_source": true,
           "matched_facts": [
             "evaluator",
             "optimizer"
@@ -297,6 +331,30 @@
           "has_provenance": true,
           "snippet": "## Slide 4\n\nWhat we need from you (2/2)\n\n• {\"requirement\": \"[Sprint 2] Build an Agentic RAG workflow inside the Advisor Agent node that feat..."
         }
+      ]
+    }
+  ],
+  "negative_controls": [
+    {
+      "domain": "Out-of-Domain: Quantum Computing",
+      "query": "Quantum computing superconductor qubits and post-quantum cryptography in Sprints bootcamps",
+      "unsupported_claim_detected": true,
+      "spurious_matches": [],
+      "retrieved_sources": [
+        "project_brief.md",
+        "client_discovery_call.md",
+        "client_kickoff_deck.md"
+      ]
+    },
+    {
+      "domain": "Out-of-Domain: International Bank Transfers",
+      "query": "Corporate banking SWIFT wire transfer international routing numbers for learner stipends",
+      "unsupported_claim_detected": true,
+      "spurious_matches": [],
+      "retrieved_sources": [
+        "client_discovery_call.md",
+        "project_brief.md",
+        "client_kickoff_deck.md"
       ]
     }
   ]

@@ -87,17 +87,25 @@ assert calculate_metrics([]) == (0, 0)
 
     caller_token = generate_caller_token("main_demo_orchestrator", "advisor")
     db_result = get_learner_by_id("SPR-1001", auth_token=caller_token)
-    learner = db_result["data"][0] if (db_result.get("status") == "success" and db_result.get("data")) else {
-        "learner_id": "SPR-1001",
-        "name": "Ahmed Youssef",
-        "bootcamp_track": "Advanced Agentic AI",
-        "completed_modules": 12,
-        "python_assignment_score": 95,
-        "target_salary_egp": 30000,
-        "preferred_employers": "Fawry, Swvl",
-        "readiness_status": "Ready for Placement",
-    }
-    print(f"  [SQLite DB] Verified Record for: {learner['name']} (ID: {learner['learner_id']})")
+    has_real_record = bool(db_result.get("status") == "success" and db_result.get("data"))
+
+    if has_real_record:
+        learner = db_result["data"][0]
+        print(f"  [SQLite DB] Verified Record for: {learner['name']} (ID: {learner['learner_id']})")
+    else:
+        learner = {
+            "learner_id": "SYN-DEMO-01",
+            "name": "Ahmed Youssef (Synthetic Profile)",
+            "bootcamp_track": "Advanced Agentic AI",
+            "completed_modules": 12,
+            "python_assignment_score": 95,
+            "target_salary_egp": 30000,
+            "preferred_employers": "Fawry, Swvl",
+            "readiness_status": "Ready for Placement",
+        }
+        print(f"  [Synthetic Demo Fallback] Simulated Profile for: {learner['name']} (ID: {learner['learner_id']})")
+        print("  (Notice: SQLite database record not found; running with synthetic demo mock)")
+
     print(f"  - Track: {learner['bootcamp_track']}")
     print(f"  - Completed Modules: {learner['completed_modules']}")
     print(f"  - Python Score: {learner['python_assignment_score']}/100")
@@ -105,14 +113,22 @@ assert calculate_metrics([]) == (0, 0)
     print(f"  - Preferred Employers: {learner['preferred_employers']}")
     print(f"  - Readiness Status: {learner['readiness_status']}")
 
-    print("\nExecuting live ChromaDB vector retrieval for curriculum career advice...")
-    rag_docs = retrieve_context(f"Career guidance and skills for {learner['bootcamp_track']}", k=2)
-    print(f"  [ChromaDB] Retrieved {len(rag_docs)} verified knowledge chunks:")
-    for idx, doc in enumerate(rag_docs, 1):
-        source = doc.metadata.get("source", "curriculum")
-        trust = doc.metadata.get("trust_level", "high")
-        preview = doc.page_content.strip()[:90].replace("\n", " ")
-        print(f"  {idx}. [{source}] (Trust: {trust}) -> \"{preview}...\"")
+    print("\nExecuting ChromaDB vector retrieval for curriculum career advice...")
+    rag_docs = []
+    try:
+        rag_docs = retrieve_context(f"Career guidance and skills for {learner['bootcamp_track']}", k=2)
+    except Exception as e:
+        print(f"  (ChromaDB retrieval notice: {e})")
+
+    if rag_docs:
+        print(f"  [ChromaDB] Retrieved {len(rag_docs)} verified knowledge chunks:")
+        for idx, doc in enumerate(rag_docs, 1):
+            source = doc.metadata.get("source", "curriculum")
+            trust = doc.metadata.get("trust_level", "high")
+            preview = doc.page_content.strip()[:90].replace("\n", " ")
+            print(f"  {idx}. [{source}] (Trust: {trust}) -> \"{preview}...\"")
+    else:
+        print("  [RAG Fallback] ChromaDB storage not found locally; using synthetic curriculum guidelines.")
 
     print("\nPrivacy & Governance Controls:")
     print("  - Single-learner lookups use parameterized SQL with cryptographic caller tokens")
@@ -172,6 +188,7 @@ assert calculate_metrics([]) == (0, 0)
     import os
 
     enable_live_api = os.getenv("SPRINTS_LIVE_API", "").strip().lower() in ("true", "1", "yes")
+    print(f"\n[LLM Execution Mode]: {'Live Google Gemini 1.5 Pro' if enable_live_api else 'Deterministic Structured Offline Mock'} (SPRINTS_LIVE_API={'true' if enable_live_api else 'false'})")
     if not enable_live_api:
         advisor_demo_result = {
             "status": "success",
